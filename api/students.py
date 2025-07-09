@@ -629,8 +629,13 @@ def send_reset_link(request):
         if not student:
             return JsonResponse({"error": "Email not found"}, status=404)
 
-        # Generate a unique token
-        token = get_random_string(length=32)
+        # Generate JWT token
+        payload = {
+            'email': email,
+            'exp': datetime.utcnow() + timedelta(hours=1),
+            'iat': datetime.utcnow()
+        }
+        token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
         # Store the token and its expiry time in the database
         expiry_time = datetime.now() + timedelta(hours=1)
@@ -671,7 +676,6 @@ def send_reset_link(request):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
-
 @csrf_exempt
 def reset_password(request):
     """
@@ -1892,7 +1896,136 @@ def get_student_data(request):
         return JsonResponse({'error': 'Invalid JSON in request body'}, status=400)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+   
+   
+@csrf_exempt
+def get_leaderboard_by_level(request):
+    """
+    Fetch leaderboard data for all users under a specific event, grouped by level.
     
+    Args:
+        request: HTTP request object containing event_id in the body.
+        
+    Returns:
+        JsonResponse containing leaderboard data for each level, total students, and current student's rank/points.
+    """
+    if request.method != "POST":
+        return JsonResponse({'error': 'Invalid request method'}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        event_id = data.get('event_id')
+        if not event_id:
+            return JsonResponse({'error': 'Event ID is required'}, status=400)
+
+        points_data = points_collection.find_one({"event_id": event_id})
+        event = tasks_collection.find_one({"_id": ObjectId(event_id)})
+        
+        if not event:
+            return JsonResponse({'error': 'Event not found'}, status=404)
+
+        # Get number of levels from the event
+        number_of_levels = len(event.get("levels", []))
+        level_leaderboards = {f"level_{i+1}": [] for i in range(number_of_levels)}
+        overall_leaderboard = []
+
+        if points_data:
+            student_emails = set()
+            for admin in points_data.get("assigned_to", []):
+                for mark in admin.get("marks", []):
+                    student_email = mark.get("student_email")
+                    if not student_email or student_email in student_emails:
+                        continue
+                    student_emails.add(student_email)
+                    
+                    student_name = mark.get("student_name", student_email)
+                    total_score = 0
+                    tests_taken = 0
+                    level_scores = {f"level_{i+1}": 0 for i in range(number_of_levels)}
+                    
+                    for level in mark.get("score", []):
+                        level_id = level.get("level_id")
+                        level_number = next((i + 1 for i, lvl in enumerate(event.get("levels", [])) if lvl.get("level_id") == level_id), None)
+                        if level_number is None:
+                            continue
+                        
+                        level_score = 0
+                        for task in level.get("task", []):
+                            task_points = task.get("points", 0)
+                            level_score += task_points
+                            if task_points > 0:
+                                tests_taken += 1
+                        
+                        level_scores[f"level_{level_number}"] = level_score
+                        total_score += level_score
+                    
+                    student = student_collection.find_one({"email": student_email}) or {}
+                    
+                    average_score = total_score / tests_taken if tests_taken > 0 else 0
+                    
+                    badge = "BRONZE"
+                    if total_score >= 1000:
+                        badge = "GOLD"
+                    elif total_score >= 500:
+                        badge = "SILVER"
+                    
+                    entry = {
+                        "_id": str(student.get("_id", ObjectId())),
+                        "name": student.get("name", student_name),
+                        "email": student_email,
+                        "student_id": student.get("student_id", ""),
+                        "total_score": total_score,
+                        "tests_taken": tests_taken,
+                        "average_score": round(average_score, 2),
+                        "badge": badge,
+                        "level": level_number if level_number else 1,
+                        "status": student.get("status", mark.get("status", "active"))
+                    }
+                    
+                    overall_leaderboard.append(entry)
+                    for level_key in level_scores:
+                        if level_scores[level_key] > 0 or tests_taken > 0:
+                            level_entry = {**entry, "total_score": level_scores[level_key]}
+                            level_leaderboards[level_key].append(level_entry)
+
+            # Sort and assign ranks
+            overall_leaderboard = assign_ranks(sorted(overall_leaderboard, key=lambda x: x["total_score"], reverse=True))
+            for level_key in level_leaderboards:
+                level_leaderboards[level_key] = assign_ranks(sorted(level_leaderboards[level_key], key=lambda x: x["total_score"], reverse=True))
+
+        # Get current student's rank
+        jwt_token = request.COOKIES.get('jwt') or request.headers.get('Authorization', '').replace('Bearer ', '')
+        current_student = None
+        if jwt_token:
+            try:
+                payload = jwt.decode(jwt_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+                student_email = payload.get('email')
+                for entry in overall_leaderboard:
+                    if entry["email"] == student_email:
+                        current_student = {
+                            "rank": entry["rank"],
+                            "points": entry["total_score"],
+                            "student_id": entry["student_id"]
+                        }
+                        break
+            except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+                pass
+        
+        return JsonResponse({
+            "success": True,
+            "overall": overall_leaderboard,
+            "levels": level_leaderboards,
+            "total_students": len(overall_leaderboard),
+            "current_student": current_student or {"rank": 0, "points": 0, "student_id": ""}
+        }, status=200)
+    
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON format in request body'}, status=400)
+    except Exception as e:
+        import traceback
+        print(f"Error in get_leaderboard_by_level: {str(e)}")
+        print(traceback.format_exc())
+        return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)    
 
 @csrf_exempt
 def total_points_of_user(request):
@@ -1919,7 +2052,9 @@ def total_points_of_user(request):
             "email": student_email,
             "task_points_from": {},
             "total_user_points": 0,
-            "total_user_tests": 0
+            "total_tasks_allocated": 0,
+            "total_tasks_completed": 0,
+            "task_progression": 0
         }
 
         for event in points_collection.find():
@@ -1938,20 +2073,30 @@ def total_points_of_user(request):
                                 task_name = task.get("task_name") or "Unnamed Task"
                                 points = task.get("points", 0)
 
-                                # Count every task, even if points = 0
-                                result["total_user_tests"] += 1
+                                # Count every task (allocated)
+                                result["total_tasks_allocated"] += 1
+
+                                # Count completed task only if score > 0
+                                if points > 0:
+                                    result["total_tasks_completed"] += 1
 
                                 # Build nested dict if missing
                                 if event_name not in result["task_points_from"]:
                                     result["task_points_from"][event_name] = {}
                                 if level_name not in result["task_points_from"][event_name]:
                                     result["task_points_from"][event_name][level_name] = {}
-                                
-                                # Store points per task (even if 0)
+
+                                # Store points per task
                                 result["task_points_from"][event_name][level_name][task_name] = points
 
-                                # Sum non-zero points only
+                                # Sum up total user points
                                 result["total_user_points"] += points
+
+        # Calculate task progression
+        if result["total_tasks_allocated"] > 0:
+            result["task_progression"] = round(
+                result["total_tasks_completed"] / result["total_tasks_allocated"], 2
+            )
 
         return JsonResponse(result, status=200)
 
@@ -1959,5 +2104,156 @@ def total_points_of_user(request):
         return JsonResponse({'error': 'Token expired'}, status=401)
     except jwt.InvalidTokenError:
         return JsonResponse({'error': 'Invalid token'}, status=401)
+    except Exception as e:
+        return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
+
+
+
+@csrf_exempt
+def Students_point_by_eventid(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "Invalid request method. Use POST."}, status=405)
+
+    try:
+        payload = json.loads(request.body)
+        event_id = payload.get("event_id")
+        level_id = payload.get("level_id")
+        task_ids = payload.get("task_ids", [])
+        token = payload.get("jwt")
+
+        if not (event_id and level_id and task_ids and token):
+            return JsonResponse({"error": "Missing required fields"}, status=400)
+
+        # Decode JWT
+        try:
+            decoded_token = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            student_email = decoded_token.get("email")
+        except jwt.ExpiredSignatureError:
+            return JsonResponse({"error": "JWT token has expired"}, status=401)
+        except jwt.InvalidTokenError:
+            return JsonResponse({"error": "Invalid JWT token"}, status=401)
+
+        if not student_email:
+            return JsonResponse({"error": "Invalid token. Email not found."}, status=400)
+
+        # Fetch documents
+        points_doc = points_collection.find_one({"event_id": event_id})
+        event_doc = tasks_collection.find_one({"_id": ObjectId(event_id)})  # _id is stored as string
+
+        if not points_doc or not event_doc:
+            return JsonResponse({"error": "Event not found"}, status=404)
+
+        # Build task map for lookup
+        task_map = {}
+        for level in event_doc.get("levels", []):
+            if level.get("level_id") == level_id:
+                for task in level.get("tasks", []):
+                    task_map[task["task_id"]] = {
+                        "task_name": task.get("task_name"),
+                        "total_points": task.get("total_points", 0)
+                    }
+
+        # Combine all scores for the student from all assigned_to blocks
+        combined_scores = []
+        student_name = None
+        for assignment in points_doc.get("assigned_to", []):
+            for mark in assignment.get("marks", []):
+                if mark.get("student_email") == student_email:
+                    student_name = mark.get("student_name")
+                    for level in mark.get("score", []):
+                        if level.get("level_id") == level_id:
+                            combined_scores.extend(level.get("task", []))
+
+        # Build task result array
+        task_results = []
+        for task_id in task_ids:
+            earned = 0
+            for task in combined_scores:
+                if task.get("task_id") == task_id:
+                    earned = task.get("points", 0)
+                    break  # Task found
+
+            task_info = task_map.get(task_id, {})
+            task_name = task_info.get("task_name", "Unknown Task")
+            total = task_info.get("total_points", 0)
+
+            progress = round((earned / total) * 100, 2) if total > 0 else 0.0
+
+            task_results.append({
+                "task_id": task_id,
+                "task_name": task_name,
+                "earned_points": earned,
+                "total_points": total,
+                "progress_percent": progress
+            })
+
+        return JsonResponse({
+            "event_id": event_id,
+            "student_email": student_email,
+            "student_name": student_name,
+            "level_id": level_id,
+            "tasks": task_results
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+
+@csrf_exempt
+def validate_reset_token(request):
+    """
+    Endpoint to validate JWT password reset token.
+    Expects token and email as query parameters.
+    Returns whether the token is valid or expired.
+    """
+    if request.method != "GET":
+        return JsonResponse({"error": "Invalid request method"}, status=405)
+
+    try:
+        token = request.GET.get('token')
+        email = request.GET.get('email')
+
+        if not token or not email:
+            return JsonResponse({"error": "Token and email are required"}, status=400)
+
+        # Decode and verify JWT token
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            token_email = payload.get('email')
+            if token_email != email:
+                return JsonResponse({
+                    "error": "Invalid token: email mismatch",
+                    "redirect": "/forgot-password"
+                }, status=400)
+        except jwt.ExpiredSignatureError:
+            return JsonResponse({
+                "error": "Token has expired",
+                "redirect": "/forgot-password"
+            }, status=400)
+        except jwt.InvalidTokenError:
+            return JsonResponse({
+                "error": "Invalid token",
+                "redirect": "/forgot-password"
+            }, status=400)
+
+        # Check if token exists in database and is not expired
+        student = student_collection.find_one({
+            'email': email,
+            'reset_token': token,
+            'reset_token_expiry': {'$gt': datetime.now()}
+        })
+
+        if not student:
+            return JsonResponse({
+                "error": "Invalid or expired token",
+                "redirect": "/forgot-password"
+            }, status=400)
+
+        return JsonResponse({
+            "message": "Token is valid",
+            "email": email
+        }, status=200)
+
     except Exception as e:
         return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)

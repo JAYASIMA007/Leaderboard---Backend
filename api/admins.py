@@ -651,7 +651,7 @@ def get_admin_events(request):
         import traceback
         traceback.print_exc()
         return JsonResponse({"error": str(e)}, status=500)
-
+    
 @csrf_exempt
 def get_event_task_by_admin(request, event_id):
     """
@@ -971,7 +971,9 @@ def manage_task_points(request, event_id, task_id):
         decoded = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         admin_id = decoded.get("admin_id")
         admin_name = decoded.get("name", "Unknown Admin")
-        print("📩 Admin ID from token:", admin_name)
+        print("📩 Admin ID from token:", admin_name)    
+        now_timestamp = datetime.utcnow()  
+
 
         if not admin_id:
             return JsonResponse({"error": "Invalid token payload"}, status=400)
@@ -1006,8 +1008,7 @@ def manage_task_points(request, event_id, task_id):
                             all_students.append({
                                 "email": student.get("email"),
                                 "name": student.get("name"),
-                                "roll_no": student.get("email", "").split("@")[0],
-                                "student_id": student.get("student_id"),
+                                "roll_no": student.get("student_id"),
                                 "department": student.get("department")
                             })
 
@@ -1131,7 +1132,7 @@ def manage_task_points(request, event_id, task_id):
             subtask_name = data.get("subtask_name", "")
             students = data.get("students", [])
 
-            # Validate required fields (subtask_id and subtask_name are optional)
+            # Validate required fields
             if not all([event_id, task_id, students]):
                 return JsonResponse({"error": "Missing required fields"}, status=400)
 
@@ -1227,17 +1228,24 @@ def manage_task_points(request, event_id, task_id):
                                                         sub["points"] = points
                                                         sub["subtask_name"] = subtask_name
                                                         sub["status"] = status
+                                                        sub["last_updated_on"] = now_timestamp  # ✅ added
+                                                        if "points_assigned_on" not in sub:
+                                                            sub["points_assigned_on"] = now_timestamp  # ✅ added (if new)
                                                         updated = True
                                                         print(f"Updated subtask for {student_email}")
+
                                                     break
                                             
                                             if not subtask_found:
                                                 task["sub_task"].append({
-                                                    "subtask_id": subtask_id,
-                                                    "subtask_name": subtask_name,
-                                                    "points": points,
-                                                    "status": status
-                                                })
+                                                "subtask_id": subtask_id,
+                                                "subtask_name": subtask_name,
+                                                "points": points,
+                                                "status": status,
+                                                "points_assigned_on": now_timestamp,  # ✅ added
+                                                "last_updated_on": now_timestamp      # ✅ added
+                                            })
+
                                                 updated = True
                                                 print(f"Added new subtask for {student_email}")
                                             
@@ -1253,6 +1261,9 @@ def manage_task_points(request, event_id, task_id):
                                             if old_points != points or old_status != status:
                                                 task["points"] = points
                                                 task["status"] = status
+                                                task["last_updated_on"] = now_timestamp  # ✅ added
+                                                if "points_assigned_on" not in task:
+                                                    task["points_assigned_on"] = now_timestamp  # ✅ added
                                                 task["sub_task"] = []  # Ensure no subtasks
                                                 updated = True
                                                 print(f"Updated task for {student_email}")
@@ -1263,14 +1274,18 @@ def manage_task_points(request, event_id, task_id):
                                         "task_id": task_id,
                                         "task_name": task_name,
                                         "points": points,
-                                        "sub_task": []
+                                        "sub_task": [],
+                                        "points_assigned_on": now_timestamp,  # ✅ added
+                                        "last_updated_on": now_timestamp      # ✅ added
                                     }
                                     if subtask_id and subtasks_for_task:
                                         task_data["sub_task"] = [{
                                             "subtask_id": subtask_id,
                                             "subtask_name": subtask_name,
                                             "points": points,
-                                            "status": status
+                                            "status": status,
+                                            "points_assigned_on": now_timestamp,  # ✅ added
+                                            "last_updated_on": now_timestamp      # ✅ added
                                         }]
                                         task_data["points"] = points
                                     else:
@@ -1288,6 +1303,8 @@ def manage_task_points(request, event_id, task_id):
                                     "task_id": task_id,
                                     "task_name": task_name,
                                     "points": points,
+                                    "points_assigned_on": now_timestamp,  # ✅ added
+                                    "last_updated_on": now_timestamp,      # ✅ added
                                     "sub_task": []
                                 }]
                             }
@@ -1296,7 +1313,9 @@ def manage_task_points(request, event_id, task_id):
                                     "subtask_id": subtask_id,
                                     "subtask_name": subtask_name,
                                     "points": points,
-                                    "status": status
+                                    "status": status,
+                                    "points_assigned_on": now_timestamp,  # ✅ added
+                                    "last_updated_on": now_timestamp      # ✅ added
                                 }]
                                 level_data["task"][0]["points"] = points
                             else:
@@ -1317,6 +1336,8 @@ def manage_task_points(request, event_id, task_id):
                                 "task_id": task_id,
                                 "task_name": task_name,
                                 "points": points,
+                                "points_assigned_on": now_timestamp,  # ✅ added
+                                "last_updated_on": now_timestamp,      # ✅ added
                                 "sub_task": []
                             }]
                         }]
@@ -1326,7 +1347,9 @@ def manage_task_points(request, event_id, task_id):
                             "subtask_id": subtask_id,
                             "subtask_name": subtask_name,
                             "points": points,
-                            "status": status
+                            "status": status,
+                            "points_assigned_on": now_timestamp,  # ✅ added
+                            "last_updated_on": now_timestamp      # ✅ added
                         }]
                         student_data["score"][0]["task"][0]["points"] = points
                     else:
@@ -1355,7 +1378,7 @@ def manage_task_points(request, event_id, task_id):
     else:
         return JsonResponse({"error": "Invalid request method"}, status=405)
     
-    
+
 @csrf_exempt
 def get_students_details(request, event_id):
     """
@@ -1416,6 +1439,84 @@ def get_students_details(request, event_id):
     except Exception as e:
         print("❌ Server error:", str(e))
         return JsonResponse({"error": "Internal server error"}, status=500)
+    
+@csrf_exempt
+def leaderboard(request, event_id):
+    """
+    POST: Return leaderboard data for a specific event and admin.
+    Shows student names, their points per level, and total points.
+    Only the admin who submitted the data can access their students' scores.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Invalid request method. Use POST."}, status=405)
+
+    try:
+        # Step 1: Get JWT from headers
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return JsonResponse({"error": "Authorization header missing or invalid"}, status=401)
+
+        token = auth_header.split(" ")[1]
+        decoded = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        token_admin_id = decoded.get("admin_id")
+
+        if not token_admin_id:
+            return JsonResponse({"error": "admin_id missing from token"}, status=401)
+
+        # Step 2: Fetch the event points document
+        points_doc = points_collection.find_one({"event_id": event_id})
+        if not points_doc:
+            return JsonResponse({"error": "Student not Assigned Yet or Points not Allocated "}, status=404)
+
+        # Step 3: Find the admin's section
+        admin_entry = next((a for a in points_doc.get("assigned_to", []) if a.get("admin_id") == token_admin_id), None)
+        if not admin_entry:
+            return JsonResponse({"error": "You are not assigned to this event"}, status=403)
+
+        # Step 4: Build leaderboard for this admin's students
+        leaderboard = []
+        for student in admin_entry.get("marks", []):
+            student_email = student.get("student_email")
+            student_name = student.get("student_name", "Unknown Student")
+            levels_points = []
+            total_points = 0
+
+            for level in student.get("score", []):
+                level_id = level.get("level_id")
+                level_name = level.get("level_name", "")
+                level_points = sum(task.get("points", 0) for task in level.get("task", []))
+                total_points += level_points
+
+                levels_points.append({
+                    "level_id": level_id,
+                    "level_name": level_name,
+                    "total_points": level_points
+                })
+
+            leaderboard.append({
+                "student_name": student_name,
+                "student_email": student_email,
+                "levels": levels_points,
+                "total_points": total_points  # ✅ Total score for student
+            })
+
+        if not leaderboard:
+            return JsonResponse({"message": "No students found for this event."}, status=404)
+
+        return JsonResponse({
+            "message": f"Leaderboard for event {event_id} retrieved successfully.",
+            "leaderboard": leaderboard
+        }, status=200)
+
+    except jwt.ExpiredSignatureError:
+        return JsonResponse({"error": "Token expired"}, status=401)
+    except jwt.InvalidTokenError:
+        return JsonResponse({"error": "Invalid token"}, status=401)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({"error": str(e)}, status=500)
+
 logger = logging.getLogger(__name__)
 import json
 import logging

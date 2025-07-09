@@ -1291,7 +1291,7 @@ def assign_users(request):
             if not assignments:
                 return JsonResponse({'error': 'Missing or empty assignments array'}, status=400)
 
-            # Change this line to look up by _id instead of event_id
+            # Look up event by _id
             event = tasks_collection.find_one({'_id': ObjectId(event_id)})
             if not event:
                 return JsonResponse({'error': 'Event not found'}, status=404)
@@ -1300,16 +1300,19 @@ def assign_users(request):
             # Get existing mapped event
             existing_event = mapped_events_collection.find_one({'event_id': event_id})
             existing_users_by_admin = {}
+            all_assigned_users = set()  # Track all users assigned to any admin for this event
 
             if existing_event and 'assigned_admins' in existing_event:
                 for admin in existing_event['assigned_admins']:
                     existing_users_by_admin[admin['admin_id']] = {
                         user['email'] for user in admin.get('users', [])
                     }
+                    # Collect all assigned users for duplicate check
+                    all_assigned_users.update(existing_users_by_admin[admin['admin_id']])
 
             email_failures = []
             updated_admins = []
-            user_to_admin_map = {}  # Track user assignments across admins
+            user_to_admin_map = {}  # Track user assignments in current request
 
             for assignment in assignments:
                 admin_id = assignment.get('admin_id')
@@ -1330,13 +1333,24 @@ def assign_users(request):
                         email_failures.append({'email': email, 'reason': 'Invalid email format'})
                         continue
 
-                    # Check for duplicate assignments
+                    # Check for duplicate assignments in current request
                     if email in user_to_admin_map:
                         conflicting_admin = user_to_admin_map[email]
-                        print(f"Conflict detected: {email} is assigned under both {conflicting_admin} and {admin_id}")
+                        print(f"Conflict detected in request: {email} is assigned under both {conflicting_admin} and {admin_id}")
                         return JsonResponse({
                             'error': f"User {email} is assigned under multiple admins ({conflicting_admin}, {admin_id}) in the same event."
                         }, status=400)
+
+                    # Check for duplicate assignments in existing database
+                    if email in all_assigned_users and email not in existing_emails:
+                        # Find the admin who already has this user
+                        for existing_admin_id, users in existing_users_by_admin.items():
+                            if email in users:
+                                conflicting_admin = existing_admin_id
+                                print(f"Conflict detected in DB: {email} is already assigned to {conflicting_admin}")
+                                return JsonResponse({
+                                    'error': f"User {email} is already assigned to admin {conflicting_admin} in this event."
+                                }, status=400)
 
                     # Step 1: Upsert basic user document
                     student_data_collection.update_one(
@@ -1453,7 +1467,6 @@ def assign_users(request):
             return JsonResponse({'error': f'Internal Server Error: {str(e)}'}, status=500)
 
     return JsonResponse({'error': 'Method not allowed'}, status=405)
-
 @csrf_exempt
 def remove_user(request):
     if request.method == 'POST':
