@@ -407,7 +407,7 @@ def check_token_validity(request):
             # Check if the token exists and is not expired
             student_user = student_collection.find_one({
                 'password_setup_token': token,
-                'password_setup_token_expiry': {'$gt': datetime.now(timezone.utc)}
+                'password_setup_token_expiry': {'$gt': timezone.now()}
             })
 
             if not student_user:
@@ -420,8 +420,9 @@ def check_token_validity(request):
 
         except Exception as e:
             return JsonResponse({'error': f'Internal Server Error: {str(e)}'}, status=500)
-
     return JsonResponse({'error': 'Invalid request method'}, status=405)
+
+
 @csrf_exempt
 def student_login(request):
     """Authenticates a student user, generates a JWT token, and updates attendance.
