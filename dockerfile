@@ -18,4 +18,4 @@ COPY . .
 EXPOSE 8000
 
 # Run database migrations and start Gunicorn
-CMD ["sh", "-c", "gunicorn --workers 4 --bind 0.0.0.0:8000 backend.wsgi:application"]
+CMD ["sh", "-c", "python manage.py migrate && gunicorn --workers 4 --bind 0.0.0.0:8000 backend.wsgi:application"]
