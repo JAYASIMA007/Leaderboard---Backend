@@ -238,7 +238,7 @@ def admin_signup(request):
             result = admin_collection.insert_one(admin_user)
 
             # Send the secure, one-time link to set the password
-            setup_link = f'http://localhost:5173/admin/setup-password?token={token}'
+            setup_link = f'http://snsleaderboard.s3-website-ap-southeast-2.amazonaws.com/admin/setup-password?token={token}'
             send_mail(
                 subject='Set your password for AI exam analyzer',
                 message=f"""
@@ -1688,7 +1688,7 @@ def forgot_password(request):
 
             # URL-encode the token for the reset link
             encoded_token = urllib.parse.quote(reset_token)
-            reset_link = f'http://localhost:5173/admin/forgot-password-reset-password?token={encoded_token}'
+            reset_link = f'http://snsleaderboard.s3-website-ap-southeast-2.amazonaws.com/admin/forgot-password-reset-password?token={encoded_token}'
             logger.info(f"Sending reset link to {email}: {reset_link}")
 
             # Send the reset link via email

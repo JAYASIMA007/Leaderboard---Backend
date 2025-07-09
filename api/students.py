@@ -647,7 +647,7 @@ def send_reset_link(request):
 
         # Send email with reset link
         try:
-            reset_link = f'http://localhost:5173/studentresetpassword?token={token}&email={email}'
+            reset_link = f'http://snsleaderboard.s3-website-ap-southeast-2.amazonaws.com/studentresetpassword?token={token}&email={email}'
             subject = 'Password Reset Link'
             message = f'Click the following link to reset your password: {reset_link}\nThis link will expire in 1 hour.'
 
