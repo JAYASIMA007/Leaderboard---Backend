@@ -7,7 +7,8 @@ from .superadmin import *
 from .students import *
 
 
-urlpatterns = [
+
+urlpatterns =[
 
 
     #Admin URLs
@@ -26,6 +27,7 @@ urlpatterns = [
     path('admin/validate-reset-token/', validate_reset_token, name='validate_reset_token'),
     # path('admin/reset-password1/', reset_password, name='reset_password'),
     path("admin/reset-password-for-forgot-password/", reset_password_for_forgot_password, name="reset_password_for_forgot_password"),
+    
     #Student URLs
     path('student/signup/', student_signup, name='student_signup'),
     path('student/signup-direct/', student_signup_direct, name='student_signup_direct'),
@@ -51,6 +53,7 @@ urlpatterns = [
     path("student/total_points_of_user/", total_points_of_user, name="total_points_of_user"),
     path('student/leaderboard-by-level/', get_leaderboard_by_level, name='get_leaderboard_by_level'),
     path("student/points_by_eventid/", Students_point_by_eventid, name="Students_point_by_eventid"),
+    path("student/student_daily_points_by_event",student_daily_points_by_event,name="student_daily_points_by_event"),
 
 
     #Superadmin URLs

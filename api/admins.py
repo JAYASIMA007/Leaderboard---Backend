@@ -1011,21 +1011,37 @@ def manage_task_points(request, event_id, task_id):
                                 "roll_no": student.get("student_id"),
                                 "department": student.get("department")
                             })
+                            
 
             # ✅ Get the task details from tasks collection to find all subtasks
             event_doc_task = tasks_collection.find_one({"_id": ObjectId(event_id)})
             subtasks_for_task = []
             task_found = False
-            
+
+            # ✅ Frequency map setup for levels + subtasks extraction
+            level_frequency_map = {}
             if event_doc_task:
                 for level in event_doc_task.get("levels", []):
+                    level_id_inner = level.get("level_id")
+                    frequency = None
+                    
+                    # Get frequency from ANY task in this level
+                    for task in level.get("tasks", []):
+                        if task.get("frequency"):
+                            frequency = task.get("frequency")
+                            break  # Use the first frequency found in this level
+
+                    # Check if this level contains our target task
                     for task in level.get("tasks", []):
                         if task.get("task_id") == task_id:
                             subtasks_for_task = task.get("subtasks", [])
                             task_found = True
                             break
-                    if task_found:
-                        break
+
+                    if level_id_inner:
+                        level_frequency_map[level_id_inner] = frequency
+
+
 
             # ✅ Get existing points data
             task_points = []
@@ -1109,8 +1125,8 @@ def manage_task_points(request, event_id, task_id):
                     
                     print(f"Added point entry: roll_no={student.get('roll_no', student_email.split('@')[0])}, status={student_status}, task_id={task_id}")
 
-            print(f"Total task_points entries: {len(task_points)}")
-            return JsonResponse({"points": task_points}, status=200)
+            print(f"level_frequency: {level_frequency_map}")
+            return JsonResponse({"points": task_points,"level_frequency": level_frequency_map}, status=200)
 
         except Exception as e:
             import traceback
@@ -1140,20 +1156,47 @@ def manage_task_points(request, event_id, task_id):
             event_doc_task = tasks_collection.find_one({"_id": ObjectId(event_id)})
             subtasks_for_task = []
             task_found = False
-            
+
+            # ✅ Frequency map setup for levels + subtasks extraction
+            level_frequency_map = {}
             if event_doc_task:
+                print(f"🔍 POST: Building frequency map for event_id: {event_id}")
                 for level in event_doc_task.get("levels", []):
+                    level_id_inner = level.get("level_id")
+                    frequency = None
+                    print(f"🔍 POST: Processing level_id: {level_id_inner}")
+                    
+                    # Get frequency from ANY task in this level
+                    for task in level.get("tasks", []):
+                        if task.get("frequency"):
+                            frequency = task.get("frequency")
+                            print(f"🔍 POST: Found frequency: {frequency} for level: {level_id_inner}")
+                            break  # Use the first frequency found in this level
+
+                    # Check if this level contains our target task
                     for task in level.get("tasks", []):
                         if task.get("task_id") == task_id:
                             subtasks_for_task = task.get("subtasks", [])
                             task_found = True
+                            print(f"🔍 POST: Found target task_id: {task_id} in level: {level_id_inner}")
                             break
-                    if task_found:
-                        break
 
-            # Validate subtask_id if provided
-            if subtask_id and subtask_id not in [st.get("subtask_id") for st in subtasks_for_task]:
-                return JsonResponse({"error": "Invalid subtask_id"}, status=400)
+            # Determine if this is a task with subtasks or without
+            has_subtasks = len(subtasks_for_task) > 0
+            
+            # Handle subtask_id validation and adjustment
+            if has_subtasks:
+                # For tasks with subtasks, validate that subtask_id exists
+                if not subtask_id or subtask_id not in [st.get("subtask_id") for st in subtasks_for_task]:
+                    return JsonResponse({"error": "Invalid or missing subtask_id for task with subtasks"}, status=400)
+            else:
+                # For tasks without subtasks, subtask_id might be the task_id (from frontend)
+                # We set it to None to indicate direct task management
+                if subtask_id == task_id:
+                    subtask_id = None
+                    subtask_name = ""
+                elif subtask_id is not None:
+                    return JsonResponse({"error": "subtask_id provided for task without subtasks"}, status=400)
 
             # Fetch or create event doc
             event_doc = points_collection.find_one({"event_id": event_id})
@@ -1201,9 +1244,27 @@ def manage_task_points(request, event_id, task_id):
                 for s in admin_entry.get("marks", []):
                     if s["student_email"] == student_email:
                         student_found = True
+                        
+                        # ✅ FIRST: Update frequency for ALL existing levels for this student
+                        for level in s.get("score", []):
+                            existing_level_id = level.get("level_id")
+                            expected_frequency = level_frequency_map.get(existing_level_id)
+                            current_frequency = level.get("frequency")
+                            
+                            if current_frequency != expected_frequency:
+                                level["frequency"] = expected_frequency
+                                print(f"🔁 Updated frequency for existing level {existing_level_id}: {current_frequency} -> {expected_frequency}")
+                                updated = True
+                            elif "frequency" not in level and expected_frequency is not None:
+                                level["frequency"] = expected_frequency
+                                print(f"🆕 Added missing frequency for level {existing_level_id} -> {expected_frequency}")
+                                updated = True
+                        
+                        # ✅ SECOND: Process the specific level for the current task
                         level_found = False
                         for level in s.get("score", []):
                             if level["level_id"] == level_id:
+                                print(f"Found existing level_id={level_id} for student {student_email}")
                                 level_found = True
                                 task_found = False
                                 for task in level.get("task", []):
@@ -1296,9 +1357,13 @@ def manage_task_points(request, event_id, task_id):
                                 break
                         
                         if not level_found:
+                            print(f"🆕 Creating new level for student {student_email}")
+                            print(f"🔍 Level ID: {level_id}")
+                            print(f"🔍 Frequency from map: {level_frequency_map.get(level_id)}")
                             level_data = {
                                 "level_id": level_id,
                                 "level_name": level_name,
+                                "frequency": level_frequency_map.get(level_id),  # ✅ Frequency from map
                                 "task": [{
                                     "task_id": task_id,
                                     "task_name": task_name,
@@ -1308,7 +1373,8 @@ def manage_task_points(request, event_id, task_id):
                                     "sub_task": []
                                 }]
                             }
-                            if subtask_id and subtasks_for_task:
+                            if subtask_id and has_subtasks:
+                                # Create level with subtask
                                 level_data["task"][0]["sub_task"] = [{
                                     "subtask_id": subtask_id,
                                     "subtask_name": subtask_name,
@@ -1322,16 +1388,20 @@ def manage_task_points(request, event_id, task_id):
                                 level_data["task"][0]["status"] = status
                             s["score"].append(level_data)
                             updated = True
-                            print(f"Added new level for {student_email}")
+                            print(f"Added new level for {student_email} with frequency: {level_frequency_map.get(level_id)}")
                         break
 
                 if not student_found:
+                    print(f"🆕 Creating new student {student_email}")
+                    print(f"🔍 Level ID: {level_id}")
+                    print(f"🔍 Frequency from map: {level_frequency_map.get(level_id)}")
                     student_data = {
                         "student_email": student_email,
                         "student_name": student_name,
                         "score": [{
                             "level_id": level_id,
                             "level_name": level_name,
+                            "frequency": level_frequency_map.get(level_id),  # ✅ Frequency from map
                             "task": [{
                                 "task_id": task_id,
                                 "task_name": task_name,
@@ -1342,7 +1412,8 @@ def manage_task_points(request, event_id, task_id):
                             }]
                         }]
                     }
-                    if subtask_id and subtasks_for_task:
+                    if subtask_id and has_subtasks:
+                        # Create student with subtask
                         student_data["score"][0]["task"][0]["sub_task"] = [{
                             "subtask_id": subtask_id,
                             "subtask_name": subtask_name,
@@ -1356,13 +1427,30 @@ def manage_task_points(request, event_id, task_id):
                         student_data["score"][0]["task"][0]["status"] = status
                     admin_entry.setdefault("marks", []).append(student_data)
                     updated = True
-                    print(f"Added new student {student_email}")
+                    print(f"Added new student {student_email} with level frequency: {level_frequency_map.get(level_id)}")
 
             print(f"Updated flag: {updated}")
             
             if updated:
+                # Add debugging before database update
+                print("🔍 DEBUG: About to update database with event_doc structure:")
+                for assigned_admin in event_doc.get("assigned_to", []):
+                    if assigned_admin.get("admin_id") == admin_id:
+                        for mark in assigned_admin.get("marks", []):
+                            for score in mark.get("score", []):
+                                print(f"🔍 Level {score.get('level_id')}: frequency = {score.get('frequency')}")
+                
                 result = points_collection.replace_one({"_id": event_doc["_id"]}, event_doc)
                 print(f"Database update result: {result.modified_count} documents modified")
+                
+                # Add debugging after database update to verify
+                updated_doc = points_collection.find_one({"_id": event_doc["_id"]})
+                print("🔍 DEBUG: After database update, verifying frequency in DB:")
+                for assigned_admin in updated_doc.get("assigned_to", []):
+                    if assigned_admin.get("admin_id") == admin_id:
+                        for mark in assigned_admin.get("marks", []):
+                            for score in mark.get("score", []):
+                                print(f"🔍 DB Level {score.get('level_id')}: frequency = {score.get('frequency')}")
 
             return JsonResponse({
                 "message": "Points updated successfully" if updated else "No changes made",

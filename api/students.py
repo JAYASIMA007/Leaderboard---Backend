@@ -1292,47 +1292,35 @@ def student_attendance(request):
         print(f"Error in student_attendance: {str(e)}")
         print(traceback.format_exc())
         return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
-    
+
+
 @csrf_exempt
 def get_student_points_by_event(request, event_id):
-    """
-    Fetch a student's points for a specific event
-    
-    Args:
-        request: HTTP request object
-        event_id: ID of the event to fetch points for
-        
-    Returns:
-        JsonResponse containing the student's points, tasks, and completion status for the event
-    """
     if request.method != "GET":
         return JsonResponse({"error": "Invalid request method"}, status=405)
-    
+
     try:
-        # Get JWT token from cookies or Authorization header
+        # JWT extraction
         jwt_token = request.COOKIES.get('jwt')
         if not jwt_token:
             auth_header = request.headers.get('Authorization')
             if auth_header and auth_header.startswith('Bearer '):
                 jwt_token = auth_header[7:]
-        
+
         if not jwt_token:
             return JsonResponse({"error": "Authentication required"}, status=401)
-        
-        # Decode JWT token
+
         try:
             payload = jwt.decode(jwt_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
             student_email = payload.get('email')
-            
             if not student_email:
                 return JsonResponse({"error": "Invalid authentication token"}, status=401)
-                
         except jwt.ExpiredSignatureError:
             return JsonResponse({"error": "Authentication token expired"}, status=401)
         except jwt.InvalidTokenError as e:
             return JsonResponse({"error": f"Invalid authentication token: {str(e)}"}, status=401)
-        
-        # IMPORTANT: First check if the student is mapped to this event
+
+        # Check student mapping to event
         mapped_events_collection = db['Mapped_Events']
         mapped_event = mapped_events_collection.find_one({
             "event_id": event_id,
@@ -1346,26 +1334,23 @@ def get_student_points_by_event(request, event_id):
                 }
             }
         })
-        
+
         if not mapped_event:
             return JsonResponse({
                 "error": "You don't have access to this event",
                 "message": "This event is not assigned to you."
             }, status=403)
-        
-        # Fetch event details to verify it exists and get event name
+
+        # Get event details
         event_doc = tasks_collection.find_one({"_id": ObjectId(event_id)})
-        
         if not event_doc:
             return JsonResponse({"error": "Event not found"}, status=404)
-        
+
         event_name = event_doc.get("event_name", "Unknown Event")
-        
-        # Get student points for this event from points collection
         points_collection = db['Points']
         points_data = points_collection.find_one({"event_id": event_id})
-        
-        # Initialize response structure
+
+        # Prepare response
         response = {
             "event_id": event_id,
             "event_name": event_name,
@@ -1374,51 +1359,46 @@ def get_student_points_by_event(request, event_id):
             "completion_percentage": 0,
             "levels": []
         }
-        
+
         if not points_data:
-            # No points data found, return empty response with structure
             return JsonResponse({
                 "success": True,
                 "student_email": student_email,
                 "data": response
             }, status=200)
-        
-        # Calculate total possible points from event structure
+
+        # Build levels and tasks structure from event
         for level in event_doc.get("levels", []):
-            level_points = 0
             level_points_possible = 0
             level_tasks = []
-            
+
             for task in level.get("tasks", []):
                 task_points_possible = task.get("total_points", 0)
                 level_points_possible += task_points_possible
-                
-                # Initialize task data with defaults
+
                 task_data = {
                     "task_id": task.get("task_id"),
                     "task_name": task.get("task_name"),
                     "points_earned": 0,
                     "points_possible": task_points_possible,
-                    "status": "incomplete",
+                    "status": "incomplete",  # default
                     "frequency": task.get("frequency", "Once"),
                     "deadline": task.get("full_deadline"),
                     "completed_percentage": 0,
-                    "subtasks": []
+                    "subtasks": [
+                        {
+                            "subtask_id": subtask.get("subtask_id"),
+                            "subtask_name": subtask.get("name", ""),
+                            "points_possible": subtask.get("points", 0),
+                            "points_earned": 0,
+                            "status": subtask.get("status", "incomplete")
+                        }
+                        for subtask in task.get("subtasks", [])
+                    ]
                 }
-                
-                # Add subtasks data
-                for subtask in task.get("subtasks", []):
-                    task_data["subtasks"].append({
-                        "subtask_id": subtask.get("subtask_id"),
-                        "subtask_name": subtask.get("name", ""),
-                        "points_possible": subtask.get("points", 0),
-                        "points_earned": 0,
-                        "status": "incomplete"
-                    })
-                
+
                 level_tasks.append(task_data)
-            
-            # Add level structure to response
+
             response["levels"].append({
                 "level_id": level.get("level_id"),
                 "level_name": level.get("level_name"),
@@ -1427,96 +1407,89 @@ def get_student_points_by_event(request, event_id):
                 "completed_percentage": 0,
                 "tasks": level_tasks
             })
-            
-            # Add to total possible points
+
             response["total_possible_points"] += level_points_possible
-        
-        # Find student's actual earned points from the points collection
-        student_points_found = False
+
+        # Map student scores
         for admin in points_data.get("assigned_to", []):
             for student in admin.get("marks", []):
-                if student.get("student_email") == student_email:
-                    student_points_found = True
-                    
-                    # Process each level in student's score
-                    for student_level in student.get("score", []):
-                        level_id = student_level.get("level_id")
-                        
-                        # Find corresponding level in response
-                        for response_level in response["levels"]:
-                            if response_level["level_id"] == level_id:
-                                level_points = 0
-                                
-                                # Process tasks
-                                for student_task in student_level.get("task", []):
-                                    task_id = student_task.get("task_id")
-                                    task_points = student_task.get("points", 0)
-                                    level_points += task_points
-                                    
-                                    # Find corresponding task in response
-                                    for response_task in response_level["tasks"]:
-                                        if response_task["task_id"] == task_id:
-                                            response_task["points_earned"] = task_points
-                                            
-                                            # Calculate percentage
-                                            if response_task["points_possible"] > 0:
-                                                response_task["completed_percentage"] = round(
-                                                    (task_points / response_task["points_possible"]) * 100
-                                                )
-                                            
-                                            # Set status based on sub_task status
-                                            if student_task.get("sub_task"):
-                                                status = student_task["sub_task"][0].get("status", "incomplete")
-                                                response_task["status"] = status
-                                                
-                                                # Map status for frontend display
-                                                if status == "completely_finished" or status == "fully_completed":
-                                                    response_task["status"] = "fully_completed"
-                                                elif status == "partially_finished" or status == "partially_completed":
-                                                    response_task["status"] = "partially_completed"
-                                            
-                                            # Update subtask data
-                                            for student_subtask in student_task.get("sub_task", []):
-                                                subtask_id = student_subtask.get("subtask_id")
-                                                subtask_points = student_subtask.get("points", 0)
-                                                subtask_status = student_subtask.get("status", "incomplete")
-                                                
-                                                for response_subtask in response_task["subtasks"]:
-                                                    if response_subtask["subtask_id"] == subtask_id:
-                                                        response_subtask["points_earned"] = subtask_points
-                                                        response_subtask["status"] = subtask_status
-                                                        break
-                                            
-                                            break
-                                
-                                # Update level points
-                                response_level["points_earned"] = level_points
-                                if response_level["points_possible"] > 0:
-                                    response_level["completed_percentage"] = round(
-                                        (level_points / response_level["points_possible"]) * 100
+                if student.get("student_email") != student_email:
+                    continue
+
+                for student_level in student.get("score", []):
+                    level_id = student_level.get("level_id")
+
+                    for response_level in response["levels"]:
+                        if response_level["level_id"] != level_id:
+                            continue
+
+                        level_points = 0
+
+                        for student_task in student_level.get("task", []):
+                            task_id = student_task.get("task_id")
+                            task_points = student_task.get("points", 0)
+                            level_points += task_points
+
+                            for response_task in response_level["tasks"]:
+                                if response_task["task_id"] != task_id:
+                                    continue
+
+                                response_task["points_earned"] = task_points
+
+                                if response_task["points_possible"] > 0:
+                                    response_task["completed_percentage"] = round(
+                                        (task_points / response_task["points_possible"]) * 100
                                     )
-                                
-                                # Add to total points
-                                response["total_points_earned"] += level_points
-                                break
-        
-        # Calculate overall completion percentage
+
+                                # ✅ Directly use status from Points collection
+                                status = student_task.get("status", "incomplete")
+
+                                if status in ["completely_finished", "fully_completed"]:
+                                    response_task["status"] = "fully_completed"
+                                elif status in ["partially_finished", "partially_completed"]:
+                                    response_task["status"] = "partially_completed"
+                                else:
+                                    response_task["status"] = "incomplete"
+
+                                for student_subtask in student_task.get("sub_task", []):
+                                    subtask_id = student_subtask.get("subtask_id")
+                                    subtask_points = student_subtask.get("points", 0)
+                                    subtask_status = student_subtask.get("status", "incomplete")
+
+                                    for response_subtask in response_task["subtasks"]:
+                                        if response_subtask["subtask_id"] == subtask_id:
+                                            response_subtask["points_earned"] = subtask_points
+                                            response_subtask["status"] = subtask_status
+                                            break
+
+                                break  # found task match
+
+                        response_level["points_earned"] = level_points
+                        if response_level["points_possible"] > 0:
+                            response_level["completed_percentage"] = round(
+                                (level_points / response_level["points_possible"]) * 100
+                            )
+
+                        response["total_points_earned"] += level_points
+                        break  # found level match
+
         if response["total_possible_points"] > 0:
             response["completion_percentage"] = round(
                 (response["total_points_earned"] / response["total_possible_points"]) * 100
             )
-        
+
         return JsonResponse({
             "success": True,
             "student_email": student_email,
             "data": response
         }, status=200)
-        
+
     except Exception as e:
         import traceback
         print(f"Error in get_student_points_by_event: {str(e)}")
         print(traceback.format_exc())
-        return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)    
+        return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
+     
 @csrf_exempt
 def get_tasks_by_level_id(request, level_id):
     """
@@ -2253,6 +2226,93 @@ def validate_reset_token(request):
         return JsonResponse({
             "message": "Token is valid",
             "email": email
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
+
+
+@csrf_exempt
+def student_daily_points_by_event(request):
+    if request.method != 'POST':
+        return JsonResponse({"error": "Only POST method allowed"}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        token = data.get('jwt')
+        event_id = data.get('event_id')
+
+        if not token or not event_id:
+            return JsonResponse({"error": "Missing jwt or event_id"}, status=400)
+
+        # decode token
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            student_email = payload.get('email')
+            student_name = payload.get('name')
+        except jwt.ExpiredSignatureError:
+            return JsonResponse({"error": "Token expired"}, status=401)
+        except jwt.InvalidTokenError:
+            return JsonResponse({"error": "Invalid token"}, status=401)
+
+        if not student_email or not student_name:
+            return JsonResponse({"error": "Invalid token payload"}, status=400)
+
+        # find matching points document
+        points_doc = points_collection.find_one({"event_id": event_id})
+        if not points_doc:
+            return JsonResponse({"error": "Event not found"}, status=404)
+
+        # build date -> total points map
+        daily_points = {}
+
+        for admin in points_doc.get('assigned_to', []):
+            for mark in admin.get('marks', []):
+                if mark.get('student_email') == student_email and mark.get('student_name') == student_name:
+                    for level in mark.get('score', []):
+                        for task in level.get('task', []):
+                            # handle task points
+                            task_points = task.get('points', 0)
+                            task_date = task.get('points_assigned_on')
+                            if task_date:
+                                if isinstance(task_date, datetime):
+                                    date_str = task_date.strftime('%Y-%m-%d')
+                                else:
+                                    try:
+                                        parsed = datetime.strptime(task_date, "%Y-%m-%dT%H:%M:%S.%f%z")
+                                        date_str = parsed.strftime('%Y-%m-%d')
+                                    except ValueError:
+                                        parsed = datetime.strptime(task_date, "%Y-%m-%dT%H:%M:%S.%fZ")
+                                        date_str = parsed.strftime('%Y-%m-%d')
+                                daily_points[date_str] = daily_points.get(date_str, 0) + task_points
+
+                            # handle sub_task points
+                            for sub in task.get('sub_task', []):
+                                sub_points = sub.get('points', 0)
+                                sub_date = sub.get('points_assigned_on')
+                                if sub_date:
+                                    if isinstance(sub_date, datetime):
+                                        date_str = sub_date.strftime('%Y-%m-%d')
+                                    else:
+                                        try:
+                                            parsed = datetime.strptime(sub_date, "%Y-%m-%dT%H:%M:%S.%f%z")
+                                            date_str = parsed.strftime('%Y-%m-%d')
+                                        except ValueError:
+                                            parsed = datetime.strptime(sub_date, "%Y-%m-%dT%H:%M:%S.%fZ")
+                                            date_str = parsed.strftime('%Y-%m-%d')
+                                    daily_points[date_str] = daily_points.get(date_str, 0) + sub_points
+
+        # build sorted result list
+        result = [
+            {"date": date, "total_points": total}
+            for date, total in sorted(daily_points.items())
+        ]
+
+        return JsonResponse({
+            "student_email": student_email,
+            "student_name": student_name,
+            "event_id": event_id,
+            "daily_points": result
         }, status=200)
 
     except Exception as e:
