@@ -571,7 +571,7 @@ def student_login(request):
                 "attendance": {
                     'current_streak': current_streak,
                     'max_streak': max_streak,
-                    'jwt': token,
+                    'jwt': token['jwt'],
                     'attendance_percentage': round(attendance_percentage, 2),
                     'last_login': current_datetime.isoformat(),
                     'login_count': len(login_history)
