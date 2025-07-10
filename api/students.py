@@ -2712,3 +2712,123 @@ def student_events_list(request):
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+@csrf_exempt
+def get_student_levels_progress(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST method allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        event_id = data.get('event_id')
+        email = data.get('email')
+
+        if not event_id or not email:
+            return JsonResponse({'error': 'event_id and email are required'}, status=400)
+
+        # Collections
+        events_collection = db['events']
+        points_collection = db['Points']
+
+        try:
+            obj_id = ObjectId(event_id)
+        except Exception as e:
+            return JsonResponse({'error': f'Invalid event_id: {str(e)}'}, status=400)
+
+        # Find the event doc
+        event = events_collection.find_one({'_id': obj_id})
+        if not event:
+            return JsonResponse({'error': 'Event not found'}, status=404)
+
+        event_name = event.get('event_name')
+        levels = event.get('levels', [])
+        created_at = event.get('created_at')
+        updated_at = event.get('updated_at')
+
+        # Find Points doc
+        points_doc = points_collection.find_one({'event_id': event_id})
+        if not points_doc:
+            return JsonResponse({'error': 'Points data not found for this event'}, status=404)
+
+        # Find student marks
+        student_marks = None
+        for admin in points_doc.get('assigned_to', []):
+            for student in admin.get('marks', []):
+                if student.get('student_email') == email:
+                    student_marks = student
+                    break
+            if student_marks:
+                break
+
+        if not student_marks:
+            return JsonResponse({'error': 'Student marks not found for this event'}, status=404)
+
+        level_list = []
+        total_points = 0
+
+        for level in levels:
+            level_id = level.get('level_id')
+            level_name = level.get('level_name')
+
+            # Find matching student score for this level
+            student_level_score = next((s for s in student_marks.get('score', []) if s.get('level_id') == level_id), None)
+
+            level_points = 0
+            tasks_data = []
+
+            if student_level_score:
+                for task in student_level_score.get('task', []):
+                    task_id = task.get('task_id')
+                    task_name = task.get('task_name')
+
+                    # Sum subtasks points
+                    subtasks = []
+                    subtasks_points = 0
+
+                    for subtask in task.get('sub_task', []):
+                        subtask_points = subtask.get('points', 0)
+                        subtasks_points += subtask_points
+
+                        subtasks.append({
+                            'subtask_id': subtask.get('subtask_id'),
+                            'subtask_name': subtask.get('subtask_name'),
+                            'points': subtask_points,
+                            'status': subtask.get('status')
+                        })
+
+                    # Task points = sum of subtasks points
+                    task_points = subtasks_points
+                    level_points += task_points
+
+                    tasks_data.append({
+                        'task_id': task_id,
+                        'task_name': task_name,
+                        'points': task_points,
+                        'subtasks': subtasks
+                    })
+
+            # Add this level data
+            level_list.append({
+                'level_id': level_id,
+                'level_name': level_name,
+                'event_id': event_id,
+                'event_name': event_name,
+                'points': level_points,
+                'tasks': tasks_data,
+                'created_at': created_at.isoformat() if isinstance(created_at, datetime) else str(created_at),
+                'updated_at': updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at)
+            })
+
+            total_points += level_points
+
+        return JsonResponse({
+            'success': True,
+            'email': email,
+            'event_id': event_id,
+            'event_name': event_name,
+            'levels': level_list,
+            'total_points': total_points
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
