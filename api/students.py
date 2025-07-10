@@ -571,19 +571,20 @@ def student_login(request):
                 "attendance": {
                     'current_streak': current_streak,
                     'max_streak': max_streak,
+                    'jwt': token,
                     'attendance_percentage': round(attendance_percentage, 2),
                     'last_login': current_datetime.isoformat(),
                     'login_count': len(login_history)
                 }  # Remove the conditional check that sets this to None
             }, status=200)
 
-            response.set_cookie(
-                key="jwt",
-                value=token['jwt'],
-                httponly=False,
-                samesite='None',   # Use 'None' + secure=True for cross-domain
-                secure=True      # Set to True in production with HTTPS
-            )
+            # response.set_cookie(
+            #     key="jwt",
+            #     value=token['jwt'],
+            #     httponly=False,
+            #     samesite='None',   # Use 'None' + secure=True for cross-domain
+            #     secure=True      # Set to True in production with HTTPS
+            # )
 
             return response
 
