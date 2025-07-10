@@ -581,7 +581,7 @@ def student_login(request):
                 key="jwt",
                 value=token['jwt'],
                 httponly=False,
-                samesite='Lax',   # Use 'None' + secure=True for cross-domain
+                samesite='None',   # Use 'None' + secure=True for cross-domain
                 secure=True      # Set to True in production with HTTPS
             )
 
