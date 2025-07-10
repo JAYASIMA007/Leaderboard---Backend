@@ -7,16 +7,11 @@ from .superadmin import *
 from .students import *
 
 
-
 urlpatterns =[
-
-
-    #Admin URLs
     path('admin/signin/', admin_signin, name='admin_signin'),
     path('admin/reset-password/', admin_reset_password, name='reset_password'),
     path('admin/list-assigned-students/', list_assigned_students, name='list_assigned_students'),
     path('admin/fetch_grouped_tasks/', fetch_tasks_grouped_by_event, name='fetch_grouped_tasks'),
-    path('fetch_grouped_tasks/', fetch_tasks_grouped_by_event, name='fetch_grouped_tasks'),
     path('admin/get_events/', get_admin_events, name='get_events'),
     path('admin/get_tasks/<str:event_id>/',get_event_task_by_admin, name='get_event_task_by_admin'),
     path('admin/getstudent_task_report/<str:event_id>/<str:admin_id>/', get_students_by_event_and_admin, name='get_student_task_report'),    
@@ -24,11 +19,12 @@ urlpatterns =[
     path("admin/get_students_details/<str:event_id>/", get_students_details, name="get_students_details"),
     path("admin/leaderboard_points/<str:event_id>/", leaderboard, name="get_leaderboard_points"),
     path('admin/forgot-password/', forgot_password, name='forgot_password'),
-    path('admin/validate-reset-token/', validate_reset_token, name='validate_reset_token'),
+    path('admin/validate-reset-token/', validate_reset_token_for_admin, name='validate_reset_token'),
     # path('admin/reset-password1/', reset_password, name='reset_password'),
     path("admin/reset-password-for-forgot-password/", reset_password_for_forgot_password, name="reset_password_for_forgot_password"),
     
     #Student URLs
+    
     path('student/signup/', student_signup, name='student_signup'),
     path('student/signup-direct/', student_signup_direct, name='student_signup_direct'),
     path('student/login/', student_login, name='student_login'),
@@ -47,20 +43,23 @@ urlpatterns =[
     path('student/milestones/', student_milestones, name='student_milestones'),
     path('student/leaderboard/', get_leaderboard_data, name='get_leaderboard_data'),
     path('student/events/<str:event_id>/points/', get_student_points_by_event, name='get_student_points_by_event'),
-    path("student/validate-reset-token/", validate_reset_token, name="validate_reset_token"),
+    path("student/validate-reset-token/", validate_reset_token_for_student, name="validate_reset_token"),
     # path("student/validate-student-signup-token/", validate_student_signup_token, name="validate_student_signup_token"),
     path("student/check-student-signup-token/", check_token_validity, name="check_student_signup_token"),
     path("student/total_points_of_user/", total_points_of_user, name="total_points_of_user"),
     path('student/leaderboard-by-level/', get_leaderboard_by_level, name='get_leaderboard_by_level'),
     path("student/points_by_eventid/", Students_point_by_eventid, name="Students_point_by_eventid"),
-    path("student/student_daily_points_by_event",student_daily_points_by_event,name="student_daily_points_by_event"),
+    path("student/student_daily_points_by_event/",student_daily_points_by_event,name="student_daily_points_by_event"),
+    path("student/recent_tasks_by_event/",student_recent_tasks_by_event,name="recent_tasks_by_event"),  
+    # path("student/get-daily-points/", get_daily_points, name="get_daily_points"),
 
 
     #Superadmin URLs
+    
     path('superadmin/login/', superadmin_login_view, name='superadmin_login'),
     # path('superadmin/send-email/', superadmin_send_email, name='superadmin_send_email'),
     path('superadmin/create_task/', create_task, name='create_task'),
-    path('bulk_upload/', bulk_upload_students, name='bulk_upload_students'),
+    path('superadmin/Generic_create_task/', Generic_create_task, name='Generic_create_task'),
     path('superadmin/create-admin/', create_admin, name='create_admin'),
     path('superadmin/fetch_all_tasks/', fetch_all_tasks_for_superadmin, name='fetch_all_tasks'),
     path("superadmin/get_admins/", get_admins, name='get_all_admins'),
@@ -70,5 +69,6 @@ urlpatterns =[
     path('superadmin/update_task/<str:event_id>/', update_task, name='update_task'),
     path('superadmin/delete_task/<str:event_id>/', delete_task, name='delete_task'),
     path("superadmin/validate-setup-token/", validate_setup_token, name="validate_setup_token"),
+    path("superadmin/totalscore-from-users/", totalscore_from_user, name='totalscore_from_users'),
 
 ]
