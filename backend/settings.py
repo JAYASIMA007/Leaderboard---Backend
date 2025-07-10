@@ -62,8 +62,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://snsleaderboard.s3-website-ap-southeast-2.amazonaws.com",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
-    "https://d15ldzfmzph959.cloudfront.net",
     "http://localhost:5173",
+    "https://leaderboard-frontend-vert.vercel.app"
 ]
 CORS_ALLOW_CREDENTIALS = True
 
