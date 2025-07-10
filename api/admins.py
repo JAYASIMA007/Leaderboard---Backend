@@ -1798,3 +1798,136 @@ def reset_password(request):
             return JsonResponse({'error': str(e)}, status=500)
 
     return JsonResponse({'error': 'Invalid request method'}, status=405)
+@csrf_exempt
+def get_detailed_student_tasks(request):
+    """
+    POST: Retrieve detailed task and subtask points for a specific student by event_id and student_email.
+    Returns hierarchical structure of levels, tasks, and subtasks with points, total_points, status, and timestamps.
+    No JWT authentication required.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Invalid request method. Use POST."}, status=405)
+
+    try:
+        # Parse request body
+        data = json.loads(request.body)
+        event_id = data.get("event_id")
+        student_email = data.get("student_email")
+
+        if not all([event_id, student_email]):
+            return JsonResponse({"error": "event_id and student_email are required"}, status=400)
+
+        # Find the points document for the event
+        points_doc = points_collection.find_one({"event_id": event_id})
+        if not points_doc:
+            return JsonResponse({"error": "No points data found for this event"}, status=404)
+
+        # Find the event document for total points
+        event_doc = tasks_collection.find_one({"_id": ObjectId(event_id)})
+        if not event_doc:
+            return JsonResponse({"error": "No event data found for this event"}, status=404)
+
+        # Extract hierarchical task data for the specific student
+        student_data = None
+        for admin_entry in points_doc.get("assigned_to", []):
+            for mark in admin_entry.get("marks", []):
+                if mark.get("student_email") == student_email:
+                    student_data = mark
+                    break
+            if student_data:
+                break
+
+        if not student_data:
+            return JsonResponse({"message": f"No data found for student {student_email} in event {event_id}"}, status=200)
+
+        # Create a lookup for task and subtask total points from event_doc
+        task_total_points = {}
+        subtask_total_points = {}
+        total_possible_score = 0
+        for level in event_doc.get("levels", []):
+            for task in level.get("tasks", []):
+                task_total_points[task["task_id"]] = task.get("total_points", 0)
+                total_possible_score += task.get("total_points", 0)
+                for subtask in task.get("subtasks", []):
+                    subtask_total_points[subtask["subtask_id"]] = subtask.get("points", 0)
+
+        # Format the hierarchical response
+        levels = []
+        total_points = 0
+        for score in student_data.get("score", []):
+            level_points = sum(task.get("points", 0) for task in score.get("task", []))
+            total_points += level_points
+            level_data = {
+                "level_id": score.get("level_id"),
+                "level_name": score.get("level_name", ""),
+                "frequency": score.get("frequency"),
+                "total_points": level_points,
+                "tasks": []
+            }
+            for task in score.get("task", []):
+                # Handle points_assigned_on and last_updated_on for tasks
+                points_assigned_on = task.get("points_assigned_on", "")
+                if isinstance(points_assigned_on, dict):
+                    points_assigned_on = points_assigned_on.get("$date", "")
+                elif isinstance(points_assigned_on, datetime):
+                    points_assigned_on = points_assigned_on.isoformat()
+
+                last_updated_on = task.get("last_updated_on", "")
+                if isinstance(last_updated_on, dict):
+                    last_updated_on = last_updated_on.get("$date", "")
+                elif isinstance(last_updated_on, datetime):
+                    last_updated_on = last_updated_on.isoformat()
+
+                task_data = {
+                    "task_id": task.get("task_id"),
+                    "task_name": task.get("task_name"),
+                    "points": task.get("points", 0),
+                    "total_points": task_total_points.get(task.get("task_id"), 0),
+                    "status": task.get("status", "incomplete"),
+                    "points_assigned_on": points_assigned_on,
+                    "last_updated_on": last_updated_on,
+                    "sub_tasks": []
+                }
+                for subtask in task.get("sub_task", []):
+                    # Handle points_assigned_on and last_updated_on for subtasks
+                    sub_points_assigned_on = subtask.get("points_assigned_on", "")
+                    if isinstance(sub_points_assigned_on, dict):
+                        sub_points_assigned_on = sub_points_assigned_on.get("$date", "")
+                    elif isinstance(sub_points_assigned_on, datetime):
+                        sub_points_assigned_on = sub_points_assigned_on.isoformat()
+
+                    sub_last_updated_on = subtask.get("last_updated_on", "")
+                    if isinstance(sub_last_updated_on, dict):
+                        sub_last_updated_on = sub_last_updated_on.get("$date", "")
+                    elif isinstance(sub_last_updated_on, datetime):
+                        sub_last_updated_on = sub_last_updated_on.isoformat()
+
+                    subtask_data = {
+                        "subtask_id": subtask.get("subtask_id"),
+                        "subtask_name": subtask.get("subtask_name"),
+                        "points": subtask.get("points", 0),
+                        "total_points": subtask_total_points.get(subtask.get("subtask_id"), 0),
+                        "status": subtask.get("status", "incomplete"),
+                        "points_assigned_on": sub_points_assigned_on,
+                        "last_updated_on": sub_last_updated_on
+                    }
+                    task_data["sub_tasks"].append(subtask_data)
+                level_data["tasks"].append(task_data)
+            levels.append(level_data)
+
+        return JsonResponse({
+            "success": True,
+            "message": f"Found data for student {student_data.get('student_name', student_email)} in event {event_id}",
+            "event_id": event_id,
+            "event_name": points_doc.get("event_name", ""),
+            "student_email": student_email,
+            "student_name": student_data.get("student_name", ""),
+            "total_points": total_points,
+            "total_possible_score": total_possible_score,
+            "levels": levels
+        }, status=200)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({"error": str(e)}, status=500)
