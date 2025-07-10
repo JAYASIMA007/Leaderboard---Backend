@@ -2082,7 +2082,7 @@ def total_points_of_user(request):
         return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
 
 @csrf_exempt
-def Students_point_by_eventid(request):
+def students_point_by_eventid(request):
     if request.method != "POST":
         return JsonResponse({"error": "Invalid request method. Use POST."}, status=405)
 
@@ -2090,10 +2090,9 @@ def Students_point_by_eventid(request):
         payload = json.loads(request.body)
         event_id = payload.get("event_id")
         level_id = payload.get("level_id")
-        task_ids = payload.get("task_ids", [])
         token = payload.get("jwt")
 
-        if not (event_id and level_id and task_ids and token):
+        if not (event_id and level_id and token):
             return JsonResponse({"error": "Missing required fields"}, status=400)
 
         # Decode JWT
@@ -2108,25 +2107,12 @@ def Students_point_by_eventid(request):
         if not student_email:
             return JsonResponse({"error": "Invalid token. Email not found."}, status=400)
 
-        # Fetch documents
+        # Step 1: Get student earned points from points_collection
         points_doc = points_collection.find_one({"event_id": event_id})
-        event_doc = tasks_collection.find_one({"_id": ObjectId(event_id)})  # _id is stored as string
+        if not points_doc:
+            return JsonResponse({"error": "Event not found in points_collection"}, status=404)
 
-        if not points_doc or not event_doc:
-            return JsonResponse({"error": "Event not found"}, status=404)
-
-        # Build task map for lookup
-        task_map = {}
-        for level in event_doc.get("levels", []):
-            if level.get("level_id") == level_id:
-                for task in level.get("tasks", []):
-                    task_map[task["task_id"]] = {
-                        "task_name": task.get("task_name"),
-                        "total_points": task.get("total_points", 0)
-                    }
-
-        # Combine all scores for the student from all assigned_to blocks
-        combined_scores = []
+        student_scores = []
         student_name = None
         for assignment in points_doc.get("assigned_to", []):
             for mark in assignment.get("marks", []):
@@ -2134,21 +2120,35 @@ def Students_point_by_eventid(request):
                     student_name = mark.get("student_name")
                     for level in mark.get("score", []):
                         if level.get("level_id") == level_id:
-                            combined_scores.extend(level.get("task", []))
+                            student_scores = level.get("task", [])
+                            break
 
-        # Build task result array
+        if not student_scores:
+            return JsonResponse({"error": "No task scores found for the student at this level"}, status=404)
+
+        # Step 2: Get total points for each task from tasks_collection
+        task_doc = tasks_collection.find_one({"_id": ObjectId(event_id)})
+        if not task_doc:
+            return JsonResponse({"error": "Event not found in tasks_collection"}, status=404)
+
+        task_map = {}
+        for level in task_doc.get("levels", []):
+            if level.get("level_id") == level_id:
+                for task in level.get("tasks", []):
+                    task_map[task["task_id"]] = {
+                        "task_name": task.get("task_name", "Unknown Task"),
+                        "total_points": task.get("total_points", 0)
+                    }
+
+        # Step 3: Build final result
         task_results = []
-        for task_id in task_ids:
-            earned = 0
-            for task in combined_scores:
-                if task.get("task_id") == task_id:
-                    earned = task.get("points", 0)
-                    break  # Task found
-
+        for score in student_scores:
+            task_id = score.get("task_id")
+            earned = score.get("points", 0)
             task_info = task_map.get(task_id, {})
-            task_name = task_info.get("task_name", "Unknown Task")
-            total = task_info.get("total_points", 0)
 
+            total = task_info.get("total_points", 0)
+            task_name = task_info.get("task_name", "Unknown Task")
             progress = round((earned / total) * 100, 2) if total > 0 else 0.0
 
             task_results.append({
@@ -2452,3 +2452,245 @@ def student_recent_tasks_by_event(request):
         import traceback
         print(traceback.format_exc())
         return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
+
+@csrf_exempt
+def student_recent_tasks_by_event(request):
+    """
+    Fetch recent tasks in an event, based on logged-in student info and event_id.
+    Now includes total points grouped by event for the student,
+    and only lists incomplete tasks.
+    """
+    if request.method != 'POST':
+        return JsonResponse({"error": "Only POST method allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        token = data.get('jwt')
+        event_id = data.get('event_id')
+
+        if not token or not event_id:
+            return JsonResponse({"error": "Missing jwt or event_id"}, status=400)
+
+        # Decode JWT
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            student_email = payload.get('email')
+            student_name = payload.get('name')
+        except jwt.ExpiredSignatureError:
+            return JsonResponse({"error": "Token expired"}, status=401)
+        except jwt.InvalidTokenError:
+            return JsonResponse({"error": "Invalid token"}, status=401)
+
+        if not student_email or not student_name:
+            return JsonResponse({"error": "Invalid token payload"}, status=400)
+
+        # Find the event in the events_collection
+        event_doc = tasks_collection.find_one({"_id": ObjectId(event_id)})
+        if not event_doc:
+            return JsonResponse({"error": "Event not found"}, status=404)
+
+        # === Fetch task completion status from Points collection ===
+        completed_task_ids = set()
+
+        points_data = db['Points'].find_one({"event_id": event_id})
+        if points_data:
+            for admin in points_data.get("assigned_to", []):
+                for student in admin.get("marks", []):
+                    if student.get("student_email") == student_email:
+                        for level in student.get("score", []):
+                            for task in level.get("task", []):
+                                if task.get("status") == "completely_finished":
+                                    completed_task_ids.add(task.get("task_id"))
+
+        # === Collect tasks data ===
+        recent_tasks = []
+        event_name = event_doc.get("event_name")
+        start_date = event_doc.get("start_date")
+        end_date = event_doc.get("end_date")
+
+        for level in event_doc.get("levels", []):
+            level_id = level.get("level_id")
+            level_name = level.get("level_name")
+
+            for task in level.get("tasks", []):
+                task_id = task.get("task_id")
+
+                # ✅ Skip completed tasks
+                if task_id in completed_task_ids:
+                    continue
+
+                task_obj = {
+                    "task_id": task_id,
+                    "task_name": task.get("task_name"),
+                    "description": task.get("description"),
+                    "total_points": task.get("total_points"),
+                    "deadline": task.get("deadline"),
+                    "deadline_time": task.get("deadline_time"),
+                    "full_deadline": task.get("full_deadline"),
+                    "frequency": task.get("frequency"),
+                    "start_date": task.get("start_date"),
+                    "end_date": task.get("end_date"),
+                    "task_status": task.get("task_status"),
+                    "created_at": task.get("created_at").isoformat() if task.get("created_at") else None,
+                    "updated_at": task.get("updated_at").isoformat() if task.get("updated_at") else None,
+                    "level_id": level_id,
+                    "level_name": level_name,
+                    "subtasks": []
+                }
+
+                for sub in task.get("subtasks", []):
+                    subtask_obj = {
+                        "subtask_id": sub.get("subtask_id"),
+                        "name": sub.get("name"),
+                        "description": sub.get("description"),
+                        "points": sub.get("points"),
+                        "deadline": sub.get("deadline"),
+                        "deadline_time": sub.get("deadline_time"),
+                        "full_deadline": sub.get("full_deadline"),
+                        "status": sub.get("status"),
+                        "completion_history": sub.get("completion_history", [])
+                    }
+                    task_obj["subtasks"].append(subtask_obj)
+
+                recent_tasks.append(task_obj)
+
+        # Sort tasks by created_at descending
+        recent_tasks.sort(key=lambda x: x["created_at"] or '', reverse=True)
+
+        # === Points Summary ===
+        total_points_earned = 0
+        total_possible_points = 0
+
+        for level in event_doc.get("levels", []):
+            for task in level.get("tasks", []):
+                total_possible_points += task.get("total_points", 0)
+
+        if points_data:
+            for admin in points_data.get("assigned_to", []):
+                for student in admin.get("marks", []):
+                    if student.get("student_email") == student_email:
+                        for score in student.get("score", []):
+                            for task in score.get("task", []):
+                                total_points_earned += task.get("points", 0)
+
+        return JsonResponse({
+            "student_email": student_email,
+            "student_name": student_name,
+            "event_id": event_id,
+            "event_name": event_name,
+            "start_date": start_date,
+            "end_date": end_date,
+            "total_points_summary": {
+                "earned": total_points_earned,
+                "possible": total_possible_points,
+                "completion_percentage": round((total_points_earned / total_possible_points) * 100) if total_possible_points else 0
+            },
+            "recent_tasks": recent_tasks
+        }, status=200)
+
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
+    
+@csrf_exempt
+def student_events_list(request):
+    if request.method != 'POST':
+        return JsonResponse({"error": "Invalid request method."}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        token = data.get('jwt')
+
+        # Decode JWT
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        student_email = payload.get('email')
+        student_name = payload.get('name')
+
+    except jwt.ExpiredSignatureError:
+        return JsonResponse({"error": "Token has expired"}, status=401)
+    except jwt.InvalidTokenError:
+        return JsonResponse({"error": "Invalid token"}, status=401)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+    try:
+        mapped_events = mapped_events_collection.find({
+            "assigned_admins.users.email": student_email
+        })
+
+        recent_events = []
+
+        for event in mapped_events:
+            event_id = str(event["event_id"])
+            event_name = event["event_name"]
+
+            task_doc = tasks_collection.find_one({"_id": ObjectId(event_id)})
+            if not task_doc:
+                continue
+
+            all_task_ids = []
+            level_details = []
+
+            for level in task_doc.get("levels", []):
+                level_id = level.get("level_id")
+                level_name = level.get("level_name")
+                level_tasks = []
+
+                for task in level.get("tasks", []):
+                    task_id = task.get("task_id")
+                    all_task_ids.append(task_id)
+
+                    task_data = {
+                        "task_id": task_id,
+                        "task_name": task.get("task_name"),
+                        "status": None,
+                        "subtasks": task.get("subtasks", [])
+                    }
+
+                    level_tasks.append(task_data)
+
+                level_details.append({
+                    "level_id": level_id,
+                    "level_name": level_name,
+                    "tasks": level_tasks
+                })
+
+            # Get completed tasks from points
+            points_doc = points_collection.find_one({"event_id": event_id})
+            completed_task_ids = set()
+            task_status_map = {}
+
+            if points_doc:
+                for admin in points_doc.get("assigned_to", []):
+                    for mark in admin.get("marks", []):
+                        if mark.get("student_email") == student_email:
+                            for score in mark.get("score", []):
+                                for task in score.get("task", []):
+                                    task_id = task.get("task_id")
+                                    status = task.get("status")
+                                    task_status_map[task_id] = status
+                                    if status == "completely_finished":
+                                        completed_task_ids.add(task_id)
+
+            # Inject status into tasks
+            for level in level_details:
+                for task in level["tasks"]:
+                    task_id = task.get("task_id")
+                    task["status"] = task_status_map.get(task_id, "not_started")
+
+            if not all(task_id in completed_task_ids for task_id in all_task_ids):
+                recent_events.append({
+                    "event_id": event_id,
+                    "event_name": event_name,
+                    "student_email": student_email,
+                    "student_name": student_name,
+                    "task_total": len(all_task_ids),
+                    "task_completed": len(completed_task_ids),
+                    "levels": level_details
+                })
+
+        return JsonResponse({"recent_events": recent_events}, status=200)
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)

@@ -9,7 +9,10 @@ from .students import *
 
 
 urlpatterns =[
+
+
     #Admin URLs
+    
     path('admin/signin/', admin_signin, name='admin_signin'),
     path('admin/reset-password/', admin_reset_password, name='reset_password'),
     path('admin/list-assigned-students/', list_assigned_students, name='list_assigned_students'),
@@ -50,9 +53,10 @@ urlpatterns =[
     path("student/check-student-signup-token/", check_token_validity, name="check_student_signup_token"),
     path("student/total_points_of_user/", total_points_of_user, name="total_points_of_user"),
     path('student/leaderboard-by-level/', get_leaderboard_by_level, name='get_leaderboard_by_level'),
-    path("student/points_by_eventid/", Students_point_by_eventid, name="Students_point_by_eventid"),
+    path("student/points_by_eventid/", students_point_by_eventid, name="Students_point_by_eventid"),
     path("student/student_daily_points_by_event/",student_daily_points_by_event,name="student_daily_points_by_event"),
     path("student/recent_tasks_by_event/",student_recent_tasks_by_event,name="recent_tasks_by_event"),  
+    path("student/recent_events_by_student/", student_events_list, name="recent_events_by_student"),
     # path("student/get-daily-points/", get_daily_points, name="get_daily_points"),
 
 
@@ -61,7 +65,6 @@ urlpatterns =[
     path('superadmin/login/', superadmin_login_view, name='superadmin_login'),
     # path('superadmin/send-email/', superadmin_send_email, name='superadmin_send_email'),
     path('superadmin/create_task/', create_task, name='create_task'),
-    path('superadmin/Generic_create_task/', Generic_create_task, name='Generic_create_task'),
     path('superadmin/create-admin/', create_admin, name='create_admin'),
     path('superadmin/fetch_all_tasks/', fetch_all_tasks_for_superadmin, name='fetch_all_tasks'),
     path("superadmin/get_admins/", get_admins, name='get_all_admins'),

@@ -173,6 +173,379 @@ def get_admins(request):
         return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
+# @csrf_exempt
+# def create_task(request):
+#     if request.method == 'POST':
+#         try:
+#             # MongoDB connection setup
+#             tasks_collection = db['events']
+#             admins_collection = db['admin']
+#             students_collection = db['users']
+#             mapped_events_collection = db['Mapped_Events']
+
+#             # Parse request data
+#             try:
+#                 data = json.loads(request.body) if request.content_type == 'application/json' else request.POST.dict()
+#             except json.JSONDecodeError:
+#                 return JsonResponse({'error': 'Invalid JSON format'}, status=400)
+
+#             # Validate required fields
+#             required_fields = ['event_name', 'levels', 'assigned_to']
+#             if not all(field in data for field in required_fields):
+#                 return JsonResponse({'error': 'Missing required fields: event_name, levels, assigned_to'}, status=400)
+            
+#             # Validate event_name
+#             event_name = data['event_name']
+#             if not isinstance(event_name, str) or not event_name.strip():
+#                 return JsonResponse({'error': 'Event name must be a non-empty string'}, status=400)
+#             if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', event_name):
+#                 return JsonResponse({'error': 'Event name contains invalid characters'}, status=400)
+#             if len(event_name.strip()) > 100:
+#                 return JsonResponse({'error': 'Event name exceeds 100 characters'}, status=400)
+#             event_name = event_name.strip()
+
+#             # Validate assigned_to
+#             assigned_to = data['assigned_to']
+#             if not isinstance(assigned_to, list) or not assigned_to:
+#                 return JsonResponse({'error': 'Assigned_to must be a non-empty list of admin names or IDs'}, status=400)
+
+#             # Validate admins and collect admin details
+#             admin_ids = []
+#             assigned_admins = []
+#             for admin_identifier in assigned_to:
+#                 # Try finding admin by Admin_ID first, then by name
+#                 admin = admins_collection.find_one({'Admin_ID': admin_identifier, 'status': 'Active'})
+#                 if not admin:
+#                     admin = admins_collection.find_one({'name': admin_identifier, 'status': 'Active'})
+#                 if not admin:
+#                     return JsonResponse({'error': f'Invalid or inactive admin: {admin_identifier}'}, status=400)
+#                 admin_id = admin['Admin_ID']
+#                 admin_name = admin['name']
+#                 admin_ids.append(admin_id)
+
+#                 # Fetch students for this admin
+#                 students = students_collection.find(
+#                     {'admin_id': admin_id},
+#                     {'_id': 0, 'name': 1, 'roll_no': 1, 'email': 1}
+#                 )
+#                 seen_roll_nos = set()
+#                 admin_students = []
+#                 for student in students:
+#                     if not all(key in student for key in ['name', 'roll_no']):
+#                         continue  # Skip invalid student records
+#                     if student['roll_no'] not in seen_roll_nos:
+#                         admin_students.append({
+#                             'name': student['name'],
+#                             'roll_no': student['roll_no'],
+#                             'email': student.get('email', '')
+#                         })
+#                         seen_roll_nos.add(student['roll_no'])       
+                
+#                 assigned_admins.append({
+#                     'admin_id': admin_id,
+#                     'name': admin_name,
+#                     'students': admin_students
+#                 })
+                
+#                 if not admin_students:
+#                     print(f"No students found for admin_id: {admin_id}")
+
+#             # Validate levels structure
+#             levels = data['levels']
+#             if not isinstance(levels, list) or not levels:
+#                 return JsonResponse({'error': 'Levels must be a non-empty list'}, status=400)
+#             if len(levels) > 50:
+#                 return JsonResponse({'error': 'Too many levels (max 50)'}, status=400)
+
+#             # Check for duplicate level names
+#             level_names = [level['level_name'].strip() for level in levels]
+#             if len(set(level_names)) != len(level_names):
+#                 return JsonResponse({'error': 'Level names must be unique within the event'}, status=400)
+
+#             # Process each level
+#             for level_index, level in enumerate(levels):
+#                 if not isinstance(level, dict) or not all(key in level for key in ['level_name', 'tasks']):
+#                     return JsonResponse({'error': f'Level {level_index + 1} must have level_name and tasks'}, status=400)
+#                 level_name = level['level_name'].strip()
+#                 if not level_name:
+#                     return JsonResponse({'error': f'Level {level_index + 1} name cannot be empty or only whitespace'}, status=400)
+#                 if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', level_name):
+#                     return JsonResponse({'error': f'Level {level_index + 1} name contains invalid characters'}, status=400)
+#                 if len(level_name) > 100:
+#                     return JsonResponse({'error': f'Level {level_index + 1} name exceeds 100 characters'}, status=400)
+
+#                 tasks = level['tasks']
+#                 if not isinstance(tasks, list) or not tasks:
+#                     return JsonResponse({'error': f'Tasks must be a non-empty list for level {level_index + 1}'}, status=400)
+#                 if len(tasks) > 100:
+#                     return JsonResponse({'error': f'Too many tasks in level {level_index + 1} (max 100)'}, status=400)
+
+#                 # Check for duplicate task names within the level
+#                 task_names = [task['task_name'].strip() for task in tasks]
+#                 if len(set(task_names)) != len(task_names):
+#                     return JsonResponse({'error': f'Task names must be unique within level {level_index + 1}'}, status=400)
+
+#                 # Process each task within the level
+#                 for task_index, task in enumerate(tasks):
+#                     task_required_fields = ['task_name', 'description', 'points', 'start_date', 'end_date', 'marking_criteria']
+#                     if not all(field in task for field in task_required_fields):
+#                         return JsonResponse({'error': f'Missing required task fields in task {task_index + 1} of level {level_index + 1}: task_name, description, points, start_date, end_date, marking_criteria'}, status=400)
+
+#                     task_name = task['task_name'].strip()
+#                     description = task['description'].strip()
+#                     if not task_name:
+#                         return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} name cannot be empty or only whitespace'}, status=400)
+#                     if not description:
+#                         return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} description cannot be empty or only whitespace'}, status=400)
+#                     if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', task_name):
+#                         return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} name contains invalid characters'}, status=400)
+#                     if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', description):
+#                         return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} description contains invalid characters'}, status=400)
+#                     if len(task_name) > 100:
+#                         return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} name exceeds 100 characters'}, status=400)
+#                     if len(description) > 500:
+#                         return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} description exceeds 500 characters'}, status=400)
+#                     if not isinstance(task['points'], (int, float)) or task['points'] <= 0:
+#                         return JsonResponse({'error': 'Task points must be a positive number'}, status=400)
+
+#                     # Validate dates
+#                     try:
+#                         start_date = datetime.strptime(task['start_date'], '%Y-%m-%d')
+#                         if start_date.date() < datetime.now().date():
+#                             return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} start_date cannot be in the past'}, status=400)
+#                         end_date = datetime.strptime(task['end_date'], '%Y-%m-%d')
+#                         if end_date.date() <= start_date.date():
+#                             return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} end_date must be after start_date'}, status=400)
+#                     except ValueError:
+#                         return JsonResponse({'error': f'Invalid date format in task {task_index + 1} of level {level_index + 1}. Use YYYY-MM-DD'}, status=400)
+
+#                     # Validate deadline_time (optional)
+#                     deadline_time = task.get('deadline_time')
+#                     if deadline_time:
+#                         try:
+#                             datetime.strptime(deadline_time, '%H:%M')
+#                         except ValueError:
+#                             return JsonResponse({'error': 'Invalid deadline_time format. Use HH:MM (24-hour format)'}, status=400)
+#                     else:
+#                         deadline_time = '23:59'
+
+#                     # Create full deadline datetime by combining date and time
+#                     full_deadline = f"{task['end_date']}T{deadline_time}:00"
+                    
+#                     # Validate task_type (optional field)
+#                     task_type = task.get('task_type', 'Once')
+#                     if task_type not in ['Once', 'Daily', 'Weekly']:
+#                         return JsonResponse({'error': 'Task type must be "Once", "Daily", or "Weekly"'}, status=400)
+
+#                     # Validate duration requirements based on frequency
+#                     days_diff = (end_date.date() - start_date.date()).days
+#                     if task_type == 'Daily':
+#                         min_days = 2
+#                         if days_diff < min_days:
+#                             return JsonResponse({
+#                                 'error': f'Daily tasks require at least {min_days} days difference between start and end dates (found: {days_diff} days)'
+#                             }, status=400)
+#                     elif task_type == 'Weekly':
+#                         min_days = 7
+#                         if days_diff < min_days:
+#                             return JsonResponse({
+#                                 'error': f'Weekly tasks require at least {min_days} days difference between start and end dates (found: {days_diff} days)'
+#                             }, status=400)
+
+#                     # Validate marking_criteria
+#                     marking_criteria = task['marking_criteria']
+#                     if not isinstance(marking_criteria, dict) or not all(key in marking_criteria for key in ['fully_completed', 'partially_completed', 'incomplete']):
+#                         return JsonResponse({'error': f'Invalid task marking_criteria in task {task_index + 1} of level {level_index + 1}'}, status=400)
+#                     for key, value in marking_criteria.items():
+#                         if not isinstance(value, (int, float)) or value < 0:
+#                             return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} marking_criteria {key} must be a non-negative number'}, status=400)
+#                     if not (marking_criteria['fully_completed'] <= task['points'] and
+#                             marking_criteria['fully_completed'] > marking_criteria['partially_completed'] > marking_criteria['incomplete']):
+#                         return JsonResponse({'error': 'Marking criteria must follow: fully_completed <= task points, fully_completed > partially_completed > incomplete'}, status=400)
+
+#                     # Validate subtasks
+#                     subtasks = task.get('subtasks', [])
+#                     if subtasks:
+#                         if not isinstance(subtasks, list):
+#                             return JsonResponse({'error': 'Subtasks must be a list'}, status=400)
+#                         task_total_points = 0
+#                         subtask_names = set()
+#                         # Define date_regex for YYYY-MM-DD format
+#                         date_regex = r'^\d{4}-\d{2}-\d{2}$'
+#                         for subtask_index, subtask in enumerate(subtasks):
+#                             subtask_required_fields = ['name', 'description', 'points', 'deadline']
+#                             if not isinstance(subtask, dict) or not all(key in subtask for key in subtask_required_fields):
+#                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} must have name, description, points, and deadline'}, status=400)
+#                             subtask_name = subtask['name'].strip()
+#                             subtask_description = subtask['description'].strip()
+#                             if not subtask_name:
+#                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} name cannot be empty or only whitespace'}, status=400)
+#                             if not subtask_description:
+#                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} description cannot be empty or only whitespace'}, status=400)
+#                             if subtask_name in subtask_names:
+#                                 return JsonResponse({'error': f'Subtask names must be unique within task {task_index + 1} of level {level_index + 1}'}, status=400)
+#                             subtask_names.add(subtask_name)
+#                             if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', subtask_name):
+#                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} name contains invalid characters'}, status=400)
+#                             if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', subtask_description):
+#                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} description contains invalid characters'}, status=400)
+#                             if len(subtask_name) > 100:
+#                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} name exceeds 100 characters'}, status=400)
+#                             if len(subtask_description) > 500:
+#                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} description exceeds 500 characters'}, status=400)
+#                             if not isinstance(subtask['points'], (int, float)) or subtask['points'] < 0:
+#                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} points must be a non-negative number'}, status=400)
+#                             if subtask['points'] > 10000:
+#                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} points cannot exceed 10000'}, status=400)
+
+#                             if not re.match(date_regex, subtask['deadline']):
+#                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} deadline must be in YYYY-MM-DD format'}, status=400)
+#                             try:
+#                                 subtask_deadline = datetime.strptime(subtask['deadline'], '%Y-%m-%d')
+#                                 if subtask_deadline.date() >= end_date.date():
+#                                     return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} deadline must be before task end_date'}, status=400)
+#                                 if subtask_deadline.date() <= start_date.date():
+#                                     return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} deadline must be after task start_date'}, status=400)
+#                             except ValueError:
+#                                 return JsonResponse({'error': 'Invalid subtask deadline format. Use YYYY-MM-DD'}, status=400)
+                            
+#                             # Check for subtask deadline_time
+#                             subtask_deadline_time = subtask.get('deadline_time')
+#                             if subtask_deadline_time:
+#                                 try:
+#                                     datetime.strptime(subtask_deadline_time, '%H:%M')
+#                                 except ValueError:
+#                                     return JsonResponse({'error': 'Invalid subtask deadline_time format. Use HH:MM (24-hour format)'}, status=400)
+                                
+#                                 # Add full deadline to subtask
+#                                 subtask['full_deadline'] = f"{subtask['deadline']}T{subtask_deadline_time}:00"
+#                             else:
+#                                 # Default to end of day
+#                                 subtask['deadline_time'] = '23:59'
+#                                 subtask['full_deadline'] = f"{subtask['deadline']}T23:59:00"
+                            
+#                             task_total_points += subtask['points']
+
+#                         if task_total_points == 0:
+#                             return JsonResponse({'error': f'At least one subtask in task {task_index + 1} of level {level_index + 1} must have positive points'}, status=400)
+#                         if task_total_points != task['points']:
+#                             print(f"Task points mismatch in task {task_index + 1} of level {level_index + 1}: task.points={task['points']}, sum of subtask points={task_total_points}")
+#                             return JsonResponse({'error': f'Sum of subtask points must equal task points in task {task_index + 1} of level {level_index + 1}'}, status=400)
+#                         task['total_points'] = task_total_points
+#                     else:
+#                         task['total_points'] = task['points']
+
+#                     # Add deadline and frequency data to task
+#                     task['deadline_time'] = deadline_time
+#                     task['full_deadline'] = full_deadline
+#                     task['frequency'] = task_type
+#                     task['last_updated'] = None
+#                     task['update_history'] = []
+#                     task['deadline'] = task['end_date']
+
+#                 # Calculate total points for the level
+#                 level_total_points = sum(task['total_points'] for task in tasks)
+#                 level['total_points'] = level_total_points
+
+#             # Create task document
+#             task_document = {
+#                 '_id': ObjectId(),
+#                 'event_name': event_name,
+#                 'assigned_to': [
+#                     {'name': admin['name'], 'admin_id': admin['admin_id']} 
+#                     for admin in assigned_admins
+#                 ],
+#                 'levels': [
+#                     {
+#                         'level_id': str(uuid.uuid4()),
+#                         'level_name': level['level_name'].strip(),
+#                         'total_points': level['total_points'],
+#                         'tasks': [
+#                             {
+#                                 'task_id': str(uuid.uuid4()),
+#                                 'task_name': task['task_name'].strip(),
+#                                 'description': task['description'].strip(),
+#                                 'total_points': task['total_points'],
+#                                 'subtasks': [
+#                                     {
+#                                         'subtask_id': str(uuid.uuid4()),
+#                                         'name': subtask['name'].strip(),
+#                                         'description': subtask['description'].strip(),
+#                                         'points': subtask['points'],
+#                                         'deadline': subtask['deadline'],
+#                                         'deadline_time': subtask.get('deadline_time', '23:59'),
+#                                         'full_deadline': subtask.get('full_deadline', f"{subtask['deadline']}T23:59:00"),
+#                                         'status': 'incomplete',
+#                                         'completion_history': []
+#                                     } for subtask in task.get('subtasks', [])
+#                                 ],
+#                                 'deadline': task['deadline'],
+#                                 'deadline_time': task.get('deadline_time', '23:59'),
+#                                 'full_deadline': task.get('full_deadline', f"{task['end_date']}T23:59:00"),
+#                                 'frequency': task['frequency'],
+#                                 'start_date': task['start_date'],
+#                                 'end_date': task['end_date'],
+#                                 'marking_criteria': task['marking_criteria'],
+#                                 'last_updated': None,
+#                                 'update_history': [],
+#                                 'next_update_due': start_date.date().isoformat() if task['frequency'] != 'Once' else None,
+#                                 'task_status': 'pending'
+#                             } for task in level['tasks']
+#                         ]
+#                     } for level in levels
+#                 ],
+#                 'created_at': datetime.now(),
+#                 'updated_at': datetime.now(),
+#                 'has_recurring_tasks': any(
+#                     any(task.get('frequency', 'Once') != 'Once' for task in level['tasks'])
+#                     for level in levels
+#                 )
+#             }
+
+#             # Insert task document
+#             tasks_collection.insert_one(task_document)
+            
+#             # Get the ObjectId of the newly created task document
+#             event_id = str(task_document['_id'])
+
+#             # Create mapped events document
+#             mapped_event_document = {
+#                 '_id': ObjectId(),
+#                 'event_name': event_name,
+#                 'event_id': event_id,
+#                 'assigned_admins': [
+#                     {
+#                         'admin_id': admin['admin_id'],
+#                         'name': admin['name'],
+#                         'users': [{'email': student['email']} for student in admin['students']]
+#                     } for admin in assigned_admins
+#                 ],
+#                 'created_at': datetime.now()
+#             }
+#             try:
+#                 mapped_events_collection.insert_one(mapped_event_document)
+#             except DuplicateKeyError:
+#                 return JsonResponse({'error': 'Failed to insert mapped event due to duplicate key'}, status=500)
+#             except Exception as e:
+#                 print(f"Error inserting mapped event document: {str(e)}")
+#                 return JsonResponse({'error': 'Failed to insert mapped event document'}, status=500)
+
+#             # Prepare response
+#             response = {
+#                 'object_id': event_id,
+#                 'message': 'Event created successfully',
+#                 'event_name': event_name,
+#                 'assigned_to': [admin['name'] for admin in assigned_admins],
+#                 'has_recurring_tasks': task_document.get('has_recurring_tasks', False)
+#             }
+
+#             return JsonResponse(response, status=201)
+
+#         except Exception as e:
+#             return JsonResponse({'error': str(e)}, status=500)
+#     else:
+#         return JsonResponse({'error': 'Method not allowed'}, status=405)  
+
 @csrf_exempt
 def create_task(request):
     if request.method == 'POST':
@@ -287,9 +660,11 @@ def create_task(request):
 
                 # Process each task within the level
                 for task_index, task in enumerate(tasks):
-                    task_required_fields = ['task_name', 'description', 'points', 'start_date', 'end_date', 'marking_criteria']
-                    if not all(field in task for field in task_required_fields):
-                        return JsonResponse({'error': f'Missing required task fields in task {task_index + 1} of level {level_index + 1}: task_name, description, points, start_date, end_date, marking_criteria'}, status=400)
+                    # Required fields for all tasks
+                    base_required_fields = ['task_name', 'description', 'points', 'start_date', 'end_date']
+                    for field in base_required_fields:
+                        if field not in task:
+                            return JsonResponse({'error': f'Missing required task field {field} in task {task_index + 1} of level {level_index + 1}'}, status=400)
 
                     task_name = task['task_name'].strip()
                     description = task['description'].strip()
@@ -331,7 +706,7 @@ def create_task(request):
 
                     # Create full deadline datetime by combining date and time
                     full_deadline = f"{task['end_date']}T{deadline_time}:00"
-                    
+
                     # Validate task_type (optional field)
                     task_type = task.get('task_type', 'Once')
                     if task_type not in ['Once', 'Daily', 'Weekly']:
@@ -352,403 +727,19 @@ def create_task(request):
                                 'error': f'Weekly tasks require at least {min_days} days difference between start and end dates (found: {days_diff} days)'
                             }, status=400)
 
-                    # Validate marking_criteria
-                    marking_criteria = task['marking_criteria']
-                    if not isinstance(marking_criteria, dict) or not all(key in marking_criteria for key in ['fully_completed', 'partially_completed', 'incomplete']):
-                        return JsonResponse({'error': f'Invalid task marking_criteria in task {task_index + 1} of level {level_index + 1}'}, status=400)
-                    for key, value in marking_criteria.items():
-                        if not isinstance(value, (int, float)) or value < 0:
-                            return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} marking_criteria {key} must be a non-negative number'}, status=400)
-                    if not (marking_criteria['fully_completed'] <= task['points'] and
-                            marking_criteria['fully_completed'] > marking_criteria['partially_completed'] > marking_criteria['incomplete']):
-                        return JsonResponse({'error': 'Marking criteria must follow: fully_completed <= task points, fully_completed > partially_completed > incomplete'}, status=400)
-
                     # Validate subtasks
                     subtasks = task.get('subtasks', [])
-                    if subtasks:
+                    has_subtasks = bool(subtasks)
+                    if has_subtasks:
                         if not isinstance(subtasks, list):
                             return JsonResponse({'error': 'Subtasks must be a list'}, status=400)
                         task_total_points = 0
                         subtask_names = set()
-                        # Define date_regex for YYYY-MM-DD format
                         date_regex = r'^\d{4}-\d{2}-\d{2}$'
                         for subtask_index, subtask in enumerate(subtasks):
-                            subtask_required_fields = ['name', 'description', 'points', 'deadline']
+                            subtask_required_fields = ['name', 'description', 'points', 'start_date', 'end_date', 'marking_criteria']
                             if not isinstance(subtask, dict) or not all(key in subtask for key in subtask_required_fields):
-                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} must have name, description, points, and deadline'}, status=400)
-                            subtask_name = subtask['name'].strip()
-                            subtask_description = subtask['description'].strip()
-                            if not subtask_name:
-                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} name cannot be empty or only whitespace'}, status=400)
-                            if not subtask_description:
-                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} description cannot be empty or only whitespace'}, status=400)
-                            if subtask_name in subtask_names:
-                                return JsonResponse({'error': f'Subtask names must be unique within task {task_index + 1} of level {level_index + 1}'}, status=400)
-                            subtask_names.add(subtask_name)
-                            if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', subtask_name):
-                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} name contains invalid characters'}, status=400)
-                            if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', subtask_description):
-                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} description contains invalid characters'}, status=400)
-                            if len(subtask_name) > 100:
-                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} name exceeds 100 characters'}, status=400)
-                            if len(subtask_description) > 500:
-                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} description exceeds 500 characters'}, status=400)
-                            if not isinstance(subtask['points'], (int, float)) or subtask['points'] < 0:
-                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} points must be a non-negative number'}, status=400)
-                            if subtask['points'] > 10000:
-                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} points cannot exceed 10000'}, status=400)
-
-                            if not re.match(date_regex, subtask['deadline']):
-                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} deadline must be in YYYY-MM-DD format'}, status=400)
-                            try:
-                                subtask_deadline = datetime.strptime(subtask['deadline'], '%Y-%m-%d')
-                                if subtask_deadline.date() >= end_date.date():
-                                    return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} deadline must be before task end_date'}, status=400)
-                                if subtask_deadline.date() <= start_date.date():
-                                    return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} deadline must be after task start_date'}, status=400)
-                            except ValueError:
-                                return JsonResponse({'error': 'Invalid subtask deadline format. Use YYYY-MM-DD'}, status=400)
-                            
-                            # Check for subtask deadline_time
-                            subtask_deadline_time = subtask.get('deadline_time')
-                            if subtask_deadline_time:
-                                try:
-                                    datetime.strptime(subtask_deadline_time, '%H:%M')
-                                except ValueError:
-                                    return JsonResponse({'error': 'Invalid subtask deadline_time format. Use HH:MM (24-hour format)'}, status=400)
-                                
-                                # Add full deadline to subtask
-                                subtask['full_deadline'] = f"{subtask['deadline']}T{subtask_deadline_time}:00"
-                            else:
-                                # Default to end of day
-                                subtask['deadline_time'] = '23:59'
-                                subtask['full_deadline'] = f"{subtask['deadline']}T23:59:00"
-                            
-                            task_total_points += subtask['points']
-
-                        if task_total_points == 0:
-                            return JsonResponse({'error': f'At least one subtask in task {task_index + 1} of level {level_index + 1} must have positive points'}, status=400)
-                        if task_total_points != task['points']:
-                            print(f"Task points mismatch in task {task_index + 1} of level {level_index + 1}: task.points={task['points']}, sum of subtask points={task_total_points}")
-                            return JsonResponse({'error': f'Sum of subtask points must equal task points in task {task_index + 1} of level {level_index + 1}'}, status=400)
-                        task['total_points'] = task_total_points
-                    else:
-                        task['total_points'] = task['points']
-
-                    # Add deadline and frequency data to task
-                    task['deadline_time'] = deadline_time
-                    task['full_deadline'] = full_deadline
-                    task['frequency'] = task_type
-                    task['last_updated'] = None
-                    task['update_history'] = []
-                    task['deadline'] = task['end_date']
-
-                # Calculate total points for the level
-                level_total_points = sum(task['total_points'] for task in tasks)
-                level['total_points'] = level_total_points
-
-            # Create task document
-            task_document = {
-                '_id': ObjectId(),
-                'event_name': event_name,
-                'assigned_to': [
-                    {'name': admin['name'], 'admin_id': admin['admin_id']} 
-                    for admin in assigned_admins
-                ],
-                'levels': [
-                    {
-                        'level_id': str(uuid.uuid4()),
-                        'level_name': level['level_name'].strip(),
-                        'total_points': level['total_points'],
-                        'tasks': [
-                            {
-                                'task_id': str(uuid.uuid4()),
-                                'task_name': task['task_name'].strip(),
-                                'description': task['description'].strip(),
-                                'total_points': task['total_points'],
-                                'subtasks': [
-                                    {
-                                        'subtask_id': str(uuid.uuid4()),
-                                        'name': subtask['name'].strip(),
-                                        'description': subtask['description'].strip(),
-                                        'points': subtask['points'],
-                                        'deadline': subtask['deadline'],
-                                        'deadline_time': subtask.get('deadline_time', '23:59'),
-                                        'full_deadline': subtask.get('full_deadline', f"{subtask['deadline']}T23:59:00"),
-                                        'status': 'incomplete',
-                                        'completion_history': []
-                                    } for subtask in task.get('subtasks', [])
-                                ],
-                                'deadline': task['deadline'],
-                                'deadline_time': task.get('deadline_time', '23:59'),
-                                'full_deadline': task.get('full_deadline', f"{task['end_date']}T23:59:00"),
-                                'frequency': task['frequency'],
-                                'start_date': task['start_date'],
-                                'end_date': task['end_date'],
-                                'marking_criteria': task['marking_criteria'],
-                                'last_updated': None,
-                                'update_history': [],
-                                'next_update_due': start_date.date().isoformat() if task['frequency'] != 'Once' else None,
-                                'task_status': 'pending'
-                            } for task in level['tasks']
-                        ]
-                    } for level in levels
-                ],
-                'created_at': datetime.now(),
-                'updated_at': datetime.now(),
-                'has_recurring_tasks': any(
-                    any(task.get('frequency', 'Once') != 'Once' for task in level['tasks'])
-                    for level in levels
-                )
-            }
-
-            # Insert task document
-            tasks_collection.insert_one(task_document)
-            
-            # Get the ObjectId of the newly created task document
-            event_id = str(task_document['_id'])
-
-            # Create mapped events document
-            mapped_event_document = {
-                '_id': ObjectId(),
-                'event_name': event_name,
-                'event_id': event_id,
-                'assigned_admins': [
-                    {
-                        'admin_id': admin['admin_id'],
-                        'name': admin['name'],
-                        'users': [{'email': student['email']} for student in admin['students']]
-                    } for admin in assigned_admins
-                ],
-                'created_at': datetime.now()
-            }
-            try:
-                mapped_events_collection.insert_one(mapped_event_document)
-            except DuplicateKeyError:
-                return JsonResponse({'error': 'Failed to insert mapped event due to duplicate key'}, status=500)
-            except Exception as e:
-                print(f"Error inserting mapped event document: {str(e)}")
-                return JsonResponse({'error': 'Failed to insert mapped event document'}, status=500)
-
-            # Prepare response
-            response = {
-                'object_id': event_id,
-                'message': 'Event created successfully',
-                'event_name': event_name,
-                'assigned_to': [admin['name'] for admin in assigned_admins],
-                'has_recurring_tasks': task_document.get('has_recurring_tasks', False)
-            }
-
-            return JsonResponse(response, status=201)
-
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    else:
-        return JsonResponse({'error': 'Method not allowed'}, status=405)  
-
-@csrf_exempt
-def Generic_create_task(request):
-    if request.method == 'POST':
-        try:
-            # MongoDB connection setup
-            tasks_collection = db['events']
-            admins_collection = db['admin']
-            students_collection = db['test']
-            mapped_events_collection = db['Mapped_Events']
-
-            # Parse request data
-            try:
-                data = json.loads(request.body) if request.content_type == 'application/json' else request.POST.dict()
-            except json.JSONDecodeError:
-                return JsonResponse({'error': 'Invalid JSON format'}, status=400)
-
-            # Validate required fields
-            required_fields = ['event_name', 'levels', 'assigned_to']
-            if not all(field in data for field in required_fields):
-                return JsonResponse({'error': 'Missing required fields: event_name, levels, assigned_to'}, status=400)
-            
-            # Validate event_name
-            event_name = data['event_name']
-            if not isinstance(event_name, str) or not event_name.strip():
-                return JsonResponse({'error': 'Event name must be a non-empty string'}, status=400)
-            if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', event_name):
-                return JsonResponse({'error': 'Event name contains invalid characters'}, status=400)
-            if len(event_name.strip()) > 100:
-                return JsonResponse({'error': 'Event name exceeds 100 characters'}, status=400)
-            event_name = event_name.strip()
-
-            # Validate assigned_to
-            assigned_to = data['assigned_to']
-            if not isinstance(assigned_to, list) or not assigned_to:
-                return JsonResponse({'error': 'Assigned_to must be a non-empty list of admin names or IDs'}, status=400)
-
-            # Validate admins and collect admin details
-            admin_ids = []
-            assigned_admins = []
-            for admin_identifier in assigned_to:
-                # Try finding admin by Admin_ID first, then by name
-                admin = admins_collection.find_one({'Admin_ID': admin_identifier, 'status': 'Active'})
-                if not admin:
-                    admin = admins_collection.find_one({'name': admin_identifier, 'status': 'Active'})
-                if not admin:
-                    return JsonResponse({'error': f'Invalid or inactive admin: {admin_identifier}'}, status=400)
-                admin_id = admin['Admin_ID']
-                admin_name = admin['name']
-                admin_ids.append(admin_id)
-
-                # Fetch students for this admin
-                students = students_collection.find(
-                    {'admin_id': admin_id},
-                    {'_id': 0, 'name': 1, 'roll_no': 1, 'email': 1}
-                )
-                seen_roll_nos = set()
-                admin_students = []
-                for student in students:
-                    if not all(key in student for key in ['name', 'roll_no']):
-                        continue  # Skip invalid student records
-                    if student['roll_no'] not in seen_roll_nos:
-                        admin_students.append({
-                            'name': student['name'],
-                            'roll_no': student['roll_no'],
-                            'email': student.get('email', '')
-                        })
-                        seen_roll_nos.add(student['roll_no'])       
-                
-                assigned_admins.append({
-                    'admin_id': admin_id,
-                    'name': admin_name,
-                    'students': admin_students
-                })
-                
-                if not admin_students:
-                    print(f"No students found for admin_id: {admin_id}")
-
-            # Validate levels structure
-            levels = data['levels']
-            if not isinstance(levels, list) or not levels:
-                return JsonResponse({'error': 'Levels must be a non-empty list'}, status=400)
-            if len(levels) > 50:
-                return JsonResponse({'error': 'Too many levels (max 50)'}, status=400)
-
-            # Check for duplicate level names
-            level_names = [level['level_name'].strip() for level in levels]
-            if len(set(level_names)) != len(level_names):
-                return JsonResponse({'error': 'Level names must be unique within the event'}, status=400)
-
-            # Process each level
-            for level_index, level in enumerate(levels):
-                if not isinstance(level, dict) or not all(key in level for key in ['level_name', 'tasks']):
-                    return JsonResponse({'error': f'Level {level_index + 1} must have level_name and tasks'}, status=400)
-                level_name = level['level_name'].strip()
-                if not level_name:
-                    return JsonResponse({'error': f'Level {level_index + 1} name cannot be empty or only whitespace'}, status=400)
-                if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', level_name):
-                    return JsonResponse({'error': f'Level {level_index + 1} name contains invalid characters'}, status=400)
-                if len(level_name) > 100:
-                    return JsonResponse({'error': f'Level {level_index + 1} name exceeds 100 characters'}, status=400)
-
-                tasks = level['tasks']
-                if not isinstance(tasks, list) or not tasks:
-                    return JsonResponse({'error': f'Tasks must be a non-empty list for level {level_index + 1}'}, status=400)
-                if len(tasks) > 100:
-                    return JsonResponse({'error': f'Too many tasks in level {level_index + 1} (max 100)'}, status=400)
-
-                # Check for duplicate task names within the level
-                task_names = [task['task_name'].strip() for task in tasks]
-                if len(set(task_names)) != len(task_names):
-                    return JsonResponse({'error': f'Task names must be unique within level {level_index + 1}'}, status=400)
-
-                # Process each task within the level
-                for task_index, task in enumerate(tasks):
-                    task_required_fields = ['task_name', 'description', 'points', 'start_date', 'end_date', 'marking_criteria']
-                    if not all(field in task for field in task_required_fields):
-                        return JsonResponse({'error': f'Missing required task fields in task {task_index + 1} of level {level_index + 1}: task_name, description, points, start_date, end_date, marking_criteria'}, status=400)
-
-                    task_name = task['task_name'].strip()
-                    description = task['description'].strip()
-                    if not task_name:
-                        return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} name cannot be empty or only whitespace'}, status=400)
-                    if not description:
-                        return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} description cannot be empty or only whitespace'}, status=400)
-                    if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', task_name):
-                        return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} name contains invalid characters'}, status=400)
-                    if not re.match(r'^[a-zA-Z0-9\s\-.,!&()]+$', description):
-                        return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} description contains invalid characters'}, status=400)
-                    if len(task_name) > 100:
-                        return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} name exceeds 100 characters'}, status=400)
-                    if len(description) > 500:
-                        return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} description exceeds 500 characters'}, status=400)
-                    if not isinstance(task['points'], (int, float)) or task['points'] <= 0:
-                        return JsonResponse({'error': 'Task points must be a positive number'}, status=400)
-
-                    # Validate dates
-                    try:
-                        start_date = datetime.strptime(task['start_date'], '%Y-%m-%d')
-                        if start_date.date() < datetime.now().date():
-                            return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} start_date cannot be in the past'}, status=400)
-                        end_date = datetime.strptime(task['end_date'], '%Y-%m-%d')
-                        if end_date.date() <= start_date.date():
-                            return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} end_date must be after start_date'}, status=400)
-                    except ValueError:
-                        return JsonResponse({'error': f'Invalid date format in task {task_index + 1} of level {level_index + 1}. Use YYYY-MM-DD'}, status=400)
-
-                    # Validate deadline_time (optional)
-                    deadline_time = task.get('deadline_time')
-                    if deadline_time:
-                        try:
-                            datetime.strptime(deadline_time, '%H:%M')
-                        except ValueError:
-                            return JsonResponse({'error': 'Invalid deadline_time format. Use HH:MM (24-hour format)'}, status=400)
-                    else:
-                        deadline_time = '23:59'
-
-                    # Create full deadline datetime by combining date and time
-                    full_deadline = f"{task['end_date']}T{deadline_time}:00"
-                    
-                    # Validate task_type (optional field)
-                    task_type = task.get('task_type', 'Once')
-                    if task_type not in ['Once', 'Daily', 'Weekly']:
-                        return JsonResponse({'error': 'Task type must be "Once", "Daily", or "Weekly"'}, status=400)
-
-                    # Validate duration requirements based on frequency
-                    days_diff = (end_date.date() - start_date.date()).days
-                    if task_type == 'Daily':
-                        min_days = 2
-                        if days_diff < min_days:
-                            return JsonResponse({
-                                'error': f'Daily tasks require at least {min_days} days difference between start and end dates (found: {days_diff} days)'
-                            }, status=400)
-                    elif task_type == 'Weekly':
-                        min_days = 7
-                        if days_diff < min_days:
-                            return JsonResponse({
-                                'error': f'Weekly tasks require at least {min_days} days difference between start and end dates (found: {days_diff} days)'
-                            }, status=400)
-
-                    # Validate marking_criteria
-                    marking_criteria = task['marking_criteria']
-                    if not isinstance(marking_criteria, dict) or not all(key in marking_criteria for key in ['fully_completed', 'partially_completed', 'incomplete']):
-                        return JsonResponse({'error': f'Invalid task marking_criteria in task {task_index + 1} of level {level_index + 1}'}, status=400)
-                    for key, value in marking_criteria.items():
-                        if not isinstance(value, (int, float)) or value < 0:
-                            return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} marking_criteria {key} must be a non-negative number'}, status=400)
-                    if not (marking_criteria['fully_completed'] <= task['points'] and
-                            marking_criteria['fully_completed'] > marking_criteria['partially_completed'] > marking_criteria['incomplete']):
-                        return JsonResponse({'error': 'Marking criteria must follow: fully_completed <= task points, fully_completed > partially_completed > incomplete'}, status=400)
-
-                    # Validate subtasks
-                    subtasks = task.get('subtasks', [])
-                    if subtasks:
-                        if not isinstance(subtasks, list):
-                            return JsonResponse({'error': 'Subtasks must be a list'}, status=400)
-                        task_total_points = 0
-                        subtask_names = set()
-                        # Define date_regex for YYYY-MM-DD format
-                        date_regex = r'^\d{4}-\d{2}-\d{2}$'
-                        for subtask_index, subtask in enumerate(subtasks):
-                            subtask_required_fields = ['name', 'description', 'points', 'start_date', 'end_date']
-                            if not isinstance(subtask, dict) or not all(key in subtask for key in subtask_required_fields):
-                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} must have name, description, points, start_date, and end_date'}, status=400)
+                                return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} must have name, description, points, start_date, end_date, marking_criteria'}, status=400)
                             subtask_name = subtask['name'].strip()
                             subtask_description = subtask['description'].strip()
                             if not subtask_name:
@@ -776,12 +767,9 @@ def Generic_create_task(request):
                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} start_date must be in YYYY-MM-DD format'}, status=400)
                             if not re.match(date_regex, subtask['end_date']):
                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} end_date must be in YYYY-MM-DD format'}, status=400)
-                            
                             try:
                                 subtask_start_date = datetime.strptime(subtask['start_date'], '%Y-%m-%d')
                                 subtask_end_date = datetime.strptime(subtask['end_date'], '%Y-%m-%d')
-                                
-                                # Validate subtask dates are within task date range
                                 if subtask_start_date.date() < start_date.date():
                                     return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} start_date must be on or after task start_date'}, status=400)
                                 if subtask_end_date.date() > end_date.date():
@@ -793,12 +781,12 @@ def Generic_create_task(request):
 
                             # Set deadline to end_date for backward compatibility
                             subtask['deadline'] = subtask['end_date']
-                            
+
                             # Validate subtask task_type (optional field)
                             subtask_task_type = subtask.get('task_type', 'Once')
                             if subtask_task_type not in ['Once', 'Daily', 'Weekly']:
                                 return JsonResponse({'error': f'Subtask {subtask_index + 1} task type must be "Once", "Daily", or "Weekly"'}, status=400)
-                            
+
                             # Validate duration requirements based on frequency for subtasks
                             subtask_days_diff = (subtask_end_date.date() - subtask_start_date.date()).days
                             if subtask_task_type == 'Daily':
@@ -813,7 +801,7 @@ def Generic_create_task(request):
                                     return JsonResponse({
                                         'error': f'Weekly subtasks require at least {min_days} days difference between start and end dates (found: {subtask_days_diff} days)'
                                     }, status=400)
-                            
+
                             # Check for subtask deadline_time
                             subtask_deadline_time = subtask.get('deadline_time')
                             if subtask_deadline_time:
@@ -821,17 +809,25 @@ def Generic_create_task(request):
                                     datetime.strptime(subtask_deadline_time, '%H:%M')
                                 except ValueError:
                                     return JsonResponse({'error': 'Invalid subtask deadline_time format. Use HH:MM (24-hour format)'}, status=400)
-                                
-                                # Add full deadline to subtask
                                 subtask['full_deadline'] = f"{subtask['end_date']}T{subtask_deadline_time}:00"
                             else:
-                                # Default to end of day
                                 subtask['deadline_time'] = '23:59'
                                 subtask['full_deadline'] = f"{subtask['end_date']}T23:59:00"
-                            
+
                             # Set frequency for subtask
                             subtask['frequency'] = subtask_task_type
-                            
+
+                            # Validate marking_criteria for subtask
+                            marking_criteria = subtask['marking_criteria']
+                            if not isinstance(marking_criteria, dict) or not all(key in marking_criteria for key in ['fully_completed', 'partially_completed', 'incomplete']):
+                                return JsonResponse({'error': f'Invalid subtask marking_criteria in subtask {subtask_index + 1} of task {task_index + 1} of level {level_index + 1}'}, status=400)
+                            for key, value in marking_criteria.items():
+                                if not isinstance(value, (int, float)) or value < 0:
+                                    return JsonResponse({'error': f'Subtask {subtask_index + 1} in task {task_index + 1} of level {level_index + 1} marking_criteria {key} must be a non-negative number'}, status=400)
+                            if not (marking_criteria['fully_completed'] <= subtask['points'] and
+                                    marking_criteria['fully_completed'] > marking_criteria['partially_completed'] > marking_criteria['incomplete']):
+                                return JsonResponse({'error': f'Subtask {subtask_index + 1} marking criteria must follow: fully_completed <= subtask points, fully_completed > partially_completed > incomplete'}, status=400)
+
                             task_total_points += subtask['points']
 
                         if task_total_points == 0:
@@ -840,7 +836,22 @@ def Generic_create_task(request):
                             print(f"Task points mismatch in task {task_index + 1} of level {level_index + 1}: task.points={task['points']}, sum of subtask points={task_total_points}")
                             return JsonResponse({'error': f'Sum of subtask points must equal task points in task {task_index + 1} of level {level_index + 1}'}, status=400)
                         task['total_points'] = task_total_points
+                        # Remove marking_criteria from parent task if subtasks exist
+                        if 'marking_criteria' in task:
+                            del task['marking_criteria']
                     else:
+                        # No subtasks, so marking_criteria is required at task level
+                        if 'marking_criteria' not in task:
+                            return JsonResponse({'error': f'Missing marking_criteria in task {task_index + 1} of level {level_index + 1} (no subtasks)'}, status=400)
+                        marking_criteria = task['marking_criteria']
+                        if not isinstance(marking_criteria, dict) or not all(key in marking_criteria for key in ['fully_completed', 'partially_completed', 'incomplete']):
+                            return JsonResponse({'error': f'Invalid task marking_criteria in task {task_index + 1} of level {level_index + 1}'}, status=400)
+                        for key, value in marking_criteria.items():
+                            if not isinstance(value, (int, float)) or value < 0:
+                                return JsonResponse({'error': f'Task {task_index + 1} in level {level_index + 1} marking_criteria {key} must be a non-negative number'}, status=400)
+                        if not (marking_criteria['fully_completed'] <= task['points'] and
+                                marking_criteria['fully_completed'] > marking_criteria['partially_completed'] > marking_criteria['incomplete']):
+                            return JsonResponse({'error': 'Marking criteria must follow: fully_completed <= task points, fully_completed > partially_completed > incomplete'}, status=400)
                         task['total_points'] = task['points']
 
                     # Add deadline and frequency data to task
@@ -869,39 +880,46 @@ def Generic_create_task(request):
                         'level_name': level['level_name'].strip(),
                         'total_points': level['total_points'],
                         'tasks': [
-                            {
-                                'task_id': str(uuid.uuid4()),
-                                'task_name': task['task_name'].strip(),
-                                'description': task['description'].strip(),
-                                'total_points': task['total_points'],
-                                'subtasks': [
-                                    {
-                                        'subtask_id': str(uuid.uuid4()),
-                                        'name': subtask['name'].strip(),
-                                        'description': subtask['description'].strip(),
-                                        'points': subtask['points'],
-                                        'deadline': subtask['deadline'],
-                                        'deadline_time': subtask.get('deadline_time', '23:59'),
-                                        'full_deadline': subtask.get('full_deadline', f"{subtask['deadline']}T23:59:00"),
-                                        'frequency': subtask.get('frequency', 'Once'),
-                                        'start_date': subtask['start_date'],
-                                        'end_date': subtask['end_date'],
-                                        'status': 'incomplete',
-                                        'completion_history': []
-                                    } for subtask in task.get('subtasks', [])
-                                ],
-                                'deadline': task['deadline'],
-                                'deadline_time': task.get('deadline_time', '23:59'),
-                                'full_deadline': task.get('full_deadline', f"{task['end_date']}T23:59:00"),
-                                'frequency': task['frequency'],
-                                'start_date': task['start_date'],
-                                'end_date': task['end_date'],
-                                'marking_criteria': task['marking_criteria'],
-                                'last_updated': None,
-                                'update_history': [],
-                                'next_update_due': start_date.date().isoformat() if task['frequency'] != 'Once' else None,
-                                'task_status': 'pending'
-                            } for task in level['tasks']
+                            dict(
+                                [
+                                    ('task_id', str(uuid.uuid4())),
+                                    ('task_name', task['task_name'].strip()),
+                                    ('description', task['description'].strip()),
+                                    ('total_points', task['total_points']),
+                                    ('subtasks', [
+                                        {
+                                            'subtask_id': str(uuid.uuid4()),
+                                            'name': subtask['name'].strip(),
+                                            'description': subtask['description'].strip(),
+                                            'points': subtask['points'],
+                                            'deadline': subtask['deadline'],
+                                            'deadline_time': subtask.get('deadline_time', '23:59'),
+                                            'full_deadline': subtask.get('full_deadline', f"{subtask['deadline']}T23:59:00"),
+                                            'frequency': subtask.get('frequency', 'Once'),
+                                            'start_date': subtask['start_date'],
+                                            'end_date': subtask['end_date'],
+                                            'status': 'incomplete',
+                                            'completion_history': [],
+                                            # Add marking_criteria for subtask if present
+                                            **({'marking_criteria': subtask['marking_criteria']} if 'marking_criteria' in subtask else {})
+                                        } for subtask in task.get('subtasks', [])
+                                    ]),
+                                    ('deadline', task['deadline']),
+                                    ('deadline_time', task.get('deadline_time', '23:59')),
+                                    ('full_deadline', task.get('full_deadline', f"{task['end_date']}T23:59:00")),
+                                    ('frequency', task['frequency']),
+                                    ('start_date', task['start_date']),
+                                    ('end_date', task['end_date']),
+                                    # Only include marking_criteria if present (i.e., no subtasks)
+                                    *([
+                                        ('marking_criteria', task['marking_criteria'])
+                                    ] if 'marking_criteria' in task else []),
+                                    ('last_updated', None),
+                                    ('update_history', []),
+                                    ('next_update_due', start_date.date().isoformat() if task['frequency'] != 'Once' else None),
+                                    ('task_status', 'pending')
+                                ]
+                            ) for task in level['tasks']
                         ]
                     } for level in levels
                 ],
