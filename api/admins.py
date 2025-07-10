@@ -3,6 +3,7 @@ from django.http import JsonResponse
 from datetime import datetime, timedelta
 from django.contrib.auth.hashers import make_password, check_password
 from pymongo import MongoClient
+import pymongo
 from django.core.mail import send_mail
 from bson import ObjectId
 from dotenv import load_dotenv
@@ -13,14 +14,10 @@ import jwt
 import random
 import string
 import secrets
+from datetime import datetime, timedelta
 from django.utils import timezone
+import traceback,sys
 import re
-import logging
-import jwt
-import urllib.parse
-from django.conf import settings
-
-logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -37,6 +34,7 @@ users_collection = db["users"]
 points_collection = db['Points']
 tasks_collection = db['events']
 admin_collection = db["admin"]
+
 
 
 def generate_verification_code():
@@ -148,6 +146,7 @@ def generate_tokens(name, email,Admin_ID):
     return {'jwt': token}
 
 #======================================================= ADMIN ===========================================================================
+import logging
 def generate_secure_token(length=32):
     """Generate a secure random token."""
     if length <= 0:
@@ -202,6 +201,9 @@ def setup_password(token, password):
 
     return True, "Password set successfully"
 
+# Add these imports at the top of the file
+
+# Update the admin_signup view
 @csrf_exempt
 def admin_signup(request):
     if request.method == "POST":
@@ -236,7 +238,7 @@ def admin_signup(request):
             result = admin_collection.insert_one(admin_user)
 
             # Send the secure, one-time link to set the password
-            setup_link = f'http://localhost:5173/admin/setup-password?token={token}'
+            setup_link = f'http://snsleaderboard.s3-website-ap-southeast-2.amazonaws.com/admin/setup-password?token={token}'
             send_mail(
                 subject='Set your password for AI exam analyzer',
                 message=f"""
@@ -262,6 +264,7 @@ def admin_signup(request):
 
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
+# Add a new view for validating the password setup token
 @csrf_exempt
 def validate_password_setup_token(request):
     if request.method == "GET":
@@ -287,6 +290,7 @@ def validate_password_setup_token(request):
 
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
+# Add a new view for setting the password
 @csrf_exempt
 def set_password(request):
     if request.method == "POST":
@@ -440,6 +444,7 @@ def admin_signin(request):
 
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
+
 @csrf_exempt
 def list_assigned_students(request):
     """
@@ -582,6 +587,8 @@ def fetch_tasks_grouped_by_event(request):
             return JsonResponse({"error": str(e)}, status=500)
 
     return JsonResponse({"error": "Invalid request method"}, status=405)  
+
+
 
 @csrf_exempt
 def get_admin_events(request):
@@ -861,6 +868,92 @@ def get_students_by_event_and_admin(request, event_id, admin_id):
         import traceback
         traceback.print_exc()
         return JsonResponse({"error": str(e)}, status=500)
+    
+
+
+
+# @csrf_exempt
+# def list_assigned_events_from_tasks(request):
+#     """
+#     Lists events from 'Tasks' collection where logged-in admin is assigned.
+#     Expects a POST request with Bearer token in Authorization header.
+#     """
+#     print("DEBUG: Reached list_assigned_events_from_tasks", file=sys.stderr)
+
+#     # Verify request method
+#     if request.method != "POST":
+#         return JsonResponse({"error": "Invalid request method"}, status=405)
+
+#     # Verify content type (optional, but helps ensure client sends JSON)
+#     content_type = request.headers.get('Content-Type')
+#     if content_type != 'application/json':
+#         print("DEBUG: Invalid content type, expected application/json, got", content_type, file=sys.stderr)
+#         return JsonResponse({"error": "Content-Type must be application/json"}, status=400)
+
+#     try:
+#         # Read JWT token from header
+#         auth_header = request.headers.get('Authorization')
+#         if not auth_header or not auth_header.startswith('Bearer '):
+#             print("DEBUG: Missing or invalid Authorization header", file=sys.stderr)
+#             return JsonResponse({"error": "Authorization header missing or invalid"}, status=401)
+
+#         token = auth_header.split(' ')[1]
+
+#         # Decode the token
+#         decoded = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+#         admin_email = decoded.get("email")
+#         if not admin_email:
+#             print("DEBUG: Token payload missing email", file=sys.stderr)
+#             return JsonResponse({"error": "Invalid token payload: email missing"}, status=400)
+
+#         # Find admin document to get the name
+#         admin = admin_collection.find_one({'email': admin_email})
+#         if not admin:
+#             print("DEBUG: Admin not found for email", admin_email, file=sys.stderr)
+#             return JsonResponse({"error": "Admin not found"}, status=404)
+
+#         admin_name = admin.get("name")
+#         if not admin_name:
+#             print("DEBUG: Admin name missing in DB for email", admin_email, file=sys.stderr)
+#             return JsonResponse({"error": "Admin name missing in DB"}, status=500)
+
+#         # Query 'Tasks' collection where assigned_to array includes admin_name
+#         assigned_events_cursor = tasks_collection.find({
+#             "assigned_to": {"$in": [admin_name]}
+#         })
+
+#         assigned_events = []
+#         for doc in assigned_events_cursor:
+#             event = {
+#                 "_id": str(doc.get("_id")),
+#                 "event_id": doc.get("event_id"),
+#                 "event_name": doc.get("event_name"),
+#                 "assigned_to": doc.get("assigned_to"),
+#                 "created_at": str(doc.get("created_at")) if doc.get("created_at") else None,
+#                 "updated_at": str(doc.get("updated_at")) if doc.get("updated_at") else None,
+#             }
+#             assigned_events.append(event)
+
+#         if not assigned_events:
+#             print("DEBUG: No events found for admin", admin_name, file=sys.stderr)
+#             return JsonResponse({"message": "No events assigned to this admin."}, status=404)
+
+#         print(f"DEBUG: Found {len(assigned_events)} events for admin {admin_name}", file=sys.stderr)
+#         return JsonResponse({
+#             "message": f"Found {len(assigned_events)} events assigned to admin.",
+#             "events": assigned_events
+#         }, status=200)
+
+#     except jwt.ExpiredSignatureError:
+#         print("DEBUG: JWT token expired", file=sys.stderr)
+#         return JsonResponse({"error": "Token expired"}, status=401)
+#     except jwt.InvalidTokenError:
+#         print("DEBUG: Invalid JWT token", file=sys.stderr)
+#         return JsonResponse({"error": "Invalid token"}, status=401)
+#     except Exception as e:
+#         print("DEBUG: Unexpected error:", str(e), file=sys.stderr)
+#         traceback.print_exc()
+#         return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
     
 @csrf_exempt
 def manage_task_points(request, event_id, task_id):
@@ -1373,6 +1466,7 @@ def manage_task_points(request, event_id, task_id):
     else:
         return JsonResponse({"error": "Invalid request method"}, status=405)
     
+
 @csrf_exempt
 def get_students_details(request, event_id):
     """
@@ -1511,6 +1605,23 @@ def leaderboard(request, event_id):
         traceback.print_exc()
         return JsonResponse({"error": str(e)}, status=500)
 
+logger = logging.getLogger(__name__)
+import json
+import logging
+import jwt
+import urllib.parse
+from django.http import JsonResponse
+from django.core.mail import send_mail
+from django.utils import timezone
+from datetime import timedelta
+from django.conf import settings
+from django.views.decorators.csrf import csrf_exempt
+
+logger = logging.getLogger(__name__)
+
+# Assuming admin_collection is a MongoDB collection defined elsewhere
+# and settings.SECRET_KEY is available for JWT encoding
+
 @csrf_exempt
 def forgot_password(request):
     """
@@ -1575,10 +1686,9 @@ def forgot_password(request):
             # Log the stored expiry time
             logger.info(f"Stored token expiry for {email}: {updated_admin.get('reset_password_token_expiry')}")
 
-            # URL-encode the token and email for the reset link
+            # URL-encode the token for the reset link
             encoded_token = urllib.parse.quote(reset_token)
-            encoded_email = urllib.parse.quote(email)
-            reset_link = f'http://localhost:5173/admin/forgot-password-reset-password?token={encoded_token}&email={encoded_email}'
+            reset_link = f'http://snsleaderboard.s3-website-ap-southeast-2.amazonaws.com/admin/forgot-password-reset-password?token={encoded_token}'
             logger.info(f"Sending reset link to {email}: {reset_link}")
 
             # Send the reset link via email
@@ -1608,14 +1718,14 @@ def forgot_password(request):
             return JsonResponse({'error': f'An unexpected error occurred: {str(e)}'}, status=500)
 
     return JsonResponse({'error': 'Invalid request method'}, status=405)
+
 @csrf_exempt
-def validate_reset_token_for_admin(request):
+def validate_reset_token(request):
     """
     Validates a JWT password reset token. Returns 404 if invalid or expired.
     Expects a GET request with 'token' as a query parameter.
     """
     if request.method == "GET":
-
         try:
             token = request.GET.get('token')
 
