@@ -1119,6 +1119,7 @@ def student_attendance(request):
     3. Increments streak if they've logged in on consecutive days
     4. Calculates attendance percentage based on login history vs expected days
     5. Returns the current streak and attendance information
+    6. Ensures login count only increases once per day
     """
     if request.method != "POST":
         return JsonResponse({'error': 'Invalid request method'}, status=405)
@@ -1170,10 +1171,20 @@ def student_attendance(request):
         last_login = student.get('last_login')
         login_history = student.get('login_history', [])
         
+        # Check if user already logged in today to prevent multiple login counts for same day
+        already_logged_in_today = False
+        if login_history:
+            last_login_in_history = login_history[-1]
+            last_login_date = last_login_in_history.date() if hasattr(last_login_in_history, 'date') else last_login_in_history
+            
+            if hasattr(last_login_date, 'year'):  # Make sure it's a date object
+                already_logged_in_today = (last_login_date == current_date)
+            
         # Debug information
         print(f"Processing attendance for {student['name']}")
         print(f"Current date: {current_date}")
         print(f"Last login: {last_login}")
+        print(f"Already logged in today: {already_logged_in_today}")
         
         # Calculate streak based on days between logins
         if last_login:
@@ -1247,6 +1258,13 @@ def student_attendance(request):
         print(f"Final current streak: {current_streak}")
         print(f"Final max streak: {max_streak}")
         print(f"Final attendance percentage: {attendance_percentage:.2f}%")
+        
+        # Only add login to history if it's the first login of the day
+        if not already_logged_in_today:
+            login_history.append(current_datetime)
+            print("Adding new login to history - first login of the day")
+        else:
+            print("Not adding login to history - already logged in today")
             
         # Update student document with new streak and attendance information
         student_data_collection.update_one(
@@ -1257,7 +1275,7 @@ def student_attendance(request):
                     'login_streak': current_streak,
                     'max_login_streak': max_streak,
                     'attendance_percentage': round(attendance_percentage, 2),
-                    'login_history': login_history + [current_datetime]
+                    'login_history': login_history
                 }
             }
         )
@@ -1270,7 +1288,7 @@ def student_attendance(request):
                 'max_streak': max_streak,
                 'attendance_percentage': round(attendance_percentage, 2),
                 'last_login': current_datetime.isoformat(),
-                'login_count': len(login_history) + 1
+                'login_count': len(login_history)  # This will reflect unique days
             }
         }, status=200)
         
