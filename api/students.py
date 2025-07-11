@@ -1973,14 +1973,13 @@ from datetime import datetime
 def get_leaderboard_by_level(request):
     if request.method != "POST":
         return JsonResponse({'error': 'Invalid request method'}, status=405)
-    
+
     try:
         data = json.loads(request.body)
         event_id = data.get('event_id')
         if not event_id:
             return JsonResponse({'error': 'Event ID is required'}, status=400)
 
-        # Fetch data
         points_data = points_collection.find_one({"event_id": event_id})
         event = tasks_collection.find_one({"_id": ObjectId(event_id)})
         mapped_event = mapped_events_collection.find_one({"event_id": event_id})
@@ -1991,6 +1990,13 @@ def get_leaderboard_by_level(request):
         number_of_levels = len(event.get("levels", []))
         level_leaderboards = {f"level_{i+1}": [] for i in range(number_of_levels)}
         overall_leaderboard = []
+
+        # Calculate total possible score
+        total_possible_score = 0
+        if event and "levels" in event:
+            for level in event["levels"]:
+                for task in level.get("tasks", []):
+                    total_possible_score += task.get("total_points", 0)
 
         # Collect mapped user emails
         mapped_emails = set()
@@ -2063,7 +2069,8 @@ def get_leaderboard_by_level(request):
                         "badge": badge,
                         "level": level_number if level_number else 1,
                         "status": student.get("status", mark.get("status", "active")),
-                        "timestamp": latest_timestamp.isoformat() if latest_timestamp else None
+                        "timestamp": latest_timestamp.isoformat() if latest_timestamp else None,
+                        "total_possible_score": total_possible_score
                     }
 
                     scored_users[email] = entry
@@ -2073,7 +2080,6 @@ def get_leaderboard_by_level(request):
                             level_entry = {**entry, "total_score": level_scores[level_key]}
                             level_leaderboards[level_key].append(level_entry)
 
-        # Include zero-point users from mapped list
         for email in mapped_emails:
             if email in scored_users:
                 continue
@@ -2089,11 +2095,11 @@ def get_leaderboard_by_level(request):
                 "badge": "BRONZE",
                 "level": 1,
                 "status": student.get("status", "inactive"),
-                "timestamp": None
+                "timestamp": None,
+                "total_possible_score": total_possible_score
             }
             overall_leaderboard.append(entry)
 
-        # Rank logic with timestamp tiebreaking
         def assign_ranks(entries):
             if not entries:
                 return entries
@@ -2115,7 +2121,6 @@ def get_leaderboard_by_level(request):
         for level_key in level_leaderboards:
             level_leaderboards[level_key] = assign_ranks(level_leaderboards[level_key])
 
-        # Current student info
         jwt_token = request.COOKIES.get('jwt') or request.headers.get('Authorization', '').replace('Bearer ', '')
         current_student = None
         if jwt_token:
@@ -2128,7 +2133,8 @@ def get_leaderboard_by_level(request):
                             "rank": entry["rank"],
                             "points": entry["total_score"],
                             "student_id": entry["student_id"],
-                            "timestamp": entry["timestamp"]
+                            "timestamp": entry["timestamp"],
+                            "total_possible_score": entry["total_possible_score"]
                         }
                         break
             except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
@@ -2139,7 +2145,7 @@ def get_leaderboard_by_level(request):
             "overall": overall_leaderboard,
             "levels": level_leaderboards,
             "total_students": len(overall_leaderboard),
-            "current_student": current_student or {"rank": 0, "points": 0, "student_id": "", "timestamp": None}
+            "current_student": current_student or {"rank": 0, "points": 0, "student_id": "", "timestamp": None, "total_possible_score": total_possible_score}
         }, status=200)
 
     except json.JSONDecodeError:
