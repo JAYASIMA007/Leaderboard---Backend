@@ -27,6 +27,8 @@ urlpatterns =[
     path('admin/validate-reset-token/', validate_reset_token_for_admin, name='validate_reset_token'),
     # path('admin/reset-password1/', reset_password, name='reset_password'),
     path("admin/reset-password-for-forgot-password/", reset_password_for_forgot_password, name="reset_password_for_forgot_password"),
+    path('student/detailed-tasks/', get_detailed_student_tasks, name='get_student_tasks'),
+
     
     #Student URLs
     
@@ -55,9 +57,10 @@ urlpatterns =[
     path('student/leaderboard-by-level/', get_leaderboard_by_level, name='get_leaderboard_by_level'),
     path("student/points_by_eventid/", students_point_by_eventid, name="Students_point_by_eventid"),
     path("student/student_daily_points_by_event/",student_daily_points_by_event,name="student_daily_points_by_event"),
-    path("student/recent_tasks_by_event/",student_recent_tasks_by_event,name="recent_tasks_by_event"),  
+    path("student/recent_tasks_by_event",student_recent_tasks_by_event,name="recent_tasks_by_event"),  
     path("student/recent_events_by_student/", student_events_list, name="recent_events_by_student"),
     # path("student/get-daily-points/", get_daily_points, name="get_daily_points"),
+    path("student/get_student_levels_progress/",get_student_levels_progress,name="get_student_levels_progress"),
 
 
     #Superadmin URLs
@@ -75,4 +78,5 @@ urlpatterns =[
     path('superadmin/delete_task/<str:event_id>/', delete_task, name='delete_task'),
     path("superadmin/validate-setup-token/", validate_setup_token, name="validate_setup_token"),
     path("superadmin/totalscore-from-users/", totalscore_from_user, name='totalscore_from_users'),
+
 ]
