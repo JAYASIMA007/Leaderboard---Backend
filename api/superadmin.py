@@ -1292,8 +1292,8 @@ def fetch_all_tasks_for_superadmin(request):
                 'levels': 1,
                 'created_at': 1,
                 'updated_at': 1,
-                'has_recurring_tasks': 1  # Include has_recurring_tasks field
-            }))
+                'has_recurring_tasks': 1
+            }).sort('created_at', -1))
 
             # Convert ObjectId and datetime for JSON serialization
             for task in tasks:
