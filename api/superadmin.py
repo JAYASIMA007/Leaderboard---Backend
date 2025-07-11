@@ -203,6 +203,24 @@ def create_task(request):
             if len(event_name.strip()) > 100:
                 return JsonResponse({'error': 'Event name exceeds 100 characters'}, status=400)
             event_name = event_name.strip()
+            
+            # Handle attendance tracking settings
+            attendance_required = data.get('attendance_required', False)
+            attendance_points = 0
+            
+            if attendance_required:
+                if not isinstance(attendance_required, bool):
+                    return JsonResponse({'error': 'attendance_required must be a boolean value'}, status=400)
+                
+                # If attendance is required, validate attendance_points
+                if 'attendance_points' not in data:
+                    return JsonResponse({'error': 'attendance_points is required when attendance tracking is enabled'}, status=400)
+                
+                attendance_points = data['attendance_points']
+                if not isinstance(attendance_points, (int, float)) or attendance_points < 0:
+                    return JsonResponse({'error': 'attendance_points must be a non-negative number'}, status=400)
+                if attendance_points > 100:
+                    return JsonResponse({'error': 'attendance_points cannot exceed 100'}, status=400)
 
             # Validate assigned_to
             assigned_to = data['assigned_to']
@@ -536,63 +554,75 @@ def create_task(request):
                         'level_name': level['level_name'].strip(),
                         'total_points': level['total_points'],
                         'tasks': [
-                            dict(
-                                [
-                                    ('task_id', str(uuid.uuid4())),
-                                    ('task_name', task['task_name'].strip()),
-                                    ('description', task['description'].strip()),
-                                    ('total_points', task['total_points']),
-                                    ('subtasks', [
-                                        dict(
-                                            [
-                                                ('subtask_id', str(uuid.uuid4())),
-                                                ('name', subtask['name'].strip()),
-                                                ('description', subtask['description'].strip()),
-                                                ('points', subtask['points']),
-                                                ('deadline', subtask['deadline']),
-                                                ('deadline_time', subtask.get('deadline_time', '23:59')),
-                                                ('full_deadline', subtask.get('full_deadline', f"{subtask['deadline']}T23:59:00")),
-                                                ('frequency', subtask.get('frequency', 'Once')),
-                                                ('start_date', subtask['start_date']),
-                                                ('end_date', subtask['end_date']),
-                                                ('status', 'incomplete'),
-                                                ('completion_history', []),
-                                                # Only include marking_criteria for subtask if frequency is Once
-                                                *([
-                                                    ('marking_criteria', subtask['marking_criteria'])
-                                                ] if 'marking_criteria' in subtask and subtask.get('frequency', 'Once') == 'Once' else []),
-                                                # Add trigger_count and frequency_based_marking_criteria if present
-                                                *([
-                                                    ('trigger_count', subtask['trigger_count'])
-                                                ] if 'trigger_count' in subtask else []),
-                                                *([
-                                                    ('frequency_based_marking_criteria', subtask['frequency_based_marking_criteria'])
-                                                ] if 'frequency_based_marking_criteria' in subtask else []),
-                                            ]
-                                        ) for subtask in task.get('subtasks', [])
-                                    ]),
-                                    ('deadline', task['deadline']),
-                                    ('deadline_time', task.get('deadline_time', '23:59')),
-                                    ('full_deadline', task.get('full_deadline', f"{task['end_date']}T23:59:00")),
-                                    ('frequency', task['frequency']),
-                                    ('start_date', task['start_date']),
-                                    ('end_date', task['end_date']),
-                                    # Only include marking_criteria if present and frequency is Once (i.e., no subtasks)
-                                    *([
-                                        ('marking_criteria', task['marking_criteria'])
-                                    ] if 'marking_criteria' in task and task.get('frequency', 'Once') == 'Once' else []),
-                                    # Add trigger_count and frequency_based_marking_criteria if present (for tasks without subtasks)
-                                    *([
-                                        ('trigger_count', task['trigger_count'])
-                                    ] if 'trigger_count' in task else []),
-                                    *([
-                                        ('frequency_based_marking_criteria', task['frequency_based_marking_criteria'])
-                                    ] if 'frequency_based_marking_criteria' in task else []),
-                                    ('last_updated', None),
-                                    ('update_history', []),
-                                    ('next_update_due', start_date.date().isoformat() if task['frequency'] != 'Once' else None),
-                                    ('task_status', 'pending')
-                                ]
+                            (
+                                # If task has subtasks, exclude frequency/marking fields at parent task level
+                                dict(
+                                    [
+                                        ('task_id', str(uuid.uuid4())),
+                                        ('task_name', task['task_name'].strip()),
+                                        ('description', task['description'].strip()),
+                                        ('total_points', task['total_points']),
+                                        ('subtasks', [
+                                            dict(
+                                                [
+                                                    ('subtask_id', str(uuid.uuid4())),
+                                                    ('name', subtask['name'].strip()),
+                                                    ('description', subtask['description'].strip()),
+                                                    ('points', subtask['points']),
+                                                    ('deadline', subtask['deadline']),
+                                                    ('deadline_time', subtask.get('deadline_time', '23:59')),
+                                                    ('full_deadline', subtask.get('full_deadline', f"{subtask['deadline']}T23:59:00")),
+                                                    ('frequency', subtask.get('frequency', 'Once')),
+                                                    ('start_date', subtask['start_date']),
+                                                    ('end_date', subtask['end_date']),
+                                                    ('status', 'incomplete'),
+                                                    ('completion_history', []),
+                                                    # Only include marking_criteria for subtask if frequency is Once
+                                                    *([
+                                                        ('marking_criteria', subtask['marking_criteria'])
+                                                    ] if 'marking_criteria' in subtask and subtask.get('frequency', 'Once') == 'Once' else []),
+                                                    # Add trigger_count and frequency_based_marking_criteria if present
+                                                    *([
+                                                        ('trigger_count', subtask['trigger_count'])
+                                                    ] if 'trigger_count' in subtask else []),
+                                                    *([
+                                                        ('frequency_based_marking_criteria', subtask['frequency_based_marking_criteria'])
+                                                    ] if 'frequency_based_marking_criteria' in subtask else []),
+                                                ]
+                                            ) for subtask in task.get('subtasks', [])
+                                        ]),
+                                        # Only include these fields if there are NO subtasks
+                                        *([
+                                            ('deadline', task['deadline']),
+                                            ('deadline_time', task.get('deadline_time', '23:59')),
+                                            ('full_deadline', task.get('full_deadline', f"{task['end_date']}T23:59:00")),
+                                            ('frequency', task['frequency']),
+                                            ('start_date', task['start_date']),
+                                            ('end_date', task['end_date']),
+                                            # Only include marking_criteria if present and frequency is Once (i.e., no subtasks)
+                                            *([
+                                                ('marking_criteria', task['marking_criteria'])
+                                            ] if 'marking_criteria' in task and task.get('frequency', 'Once') == 'Once' else []),
+                                            # Add trigger_count and frequency_based_marking_criteria if present (for tasks without subtasks)
+                                            *([
+                                                ('trigger_count', task['trigger_count'])
+                                            ] if 'trigger_count' in task else []),
+                                            *([
+                                                ('frequency_based_marking_criteria', task['frequency_based_marking_criteria'])
+                                            ] if 'frequency_based_marking_criteria' in task else []),
+                                            ('last_updated', None),
+                                            ('update_history', []),
+                                            ('next_update_due', start_date.date().isoformat() if task['frequency'] != 'Once' else None),
+                                            ('task_status', 'pending')
+                                        ] if not task.get('subtasks') else [
+                                            # If subtasks exist, only include these fields at parent task level:
+                                            ('last_updated', None),
+                                            ('update_history', []),
+                                            ('next_update_due', None),
+                                            ('task_status', 'pending')
+                                        ])
+                                    ]
+                                )
                             ) for task in level['tasks']
                         ]
                     } for level in levels
@@ -602,7 +632,12 @@ def create_task(request):
                 'has_recurring_tasks': any(
                     any(task.get('frequency', 'Once') != 'Once' for task in level['tasks'])
                     for level in levels
-                )
+                ),
+                # Add attendance tracking fields
+                'attendance_tracking': {
+                    'required': attendance_required,
+                    'points': attendance_points
+                }
             }
 
             # Insert task document
@@ -623,7 +658,12 @@ def create_task(request):
                         'users': [{'email': student['email']} for student in admin['students']]
                     } for admin in assigned_admins
                 ],
-                'created_at': datetime.now()
+                'created_at': datetime.now(),
+                # Include attendance tracking in mapped events as well
+                'attendance_tracking': {
+                    'required': attendance_required,
+                    'points': attendance_points
+                }
             }
             try:
                 mapped_events_collection.insert_one(mapped_event_document)
@@ -639,7 +679,11 @@ def create_task(request):
                 'message': 'Event created successfully',
                 'event_name': event_name,
                 'assigned_to': [admin['name'] for admin in assigned_admins],
-                'has_recurring_tasks': task_document.get('has_recurring_tasks', False)
+                'has_recurring_tasks': task_document.get('has_recurring_tasks', False),
+                'attendance_tracking': {
+                    'required': attendance_required,
+                    'points': attendance_points
+                }
             }
 
             return JsonResponse(response, status=201)
@@ -647,7 +691,7 @@ def create_task(request):
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=500)
     else:
-        return JsonResponse({'error': 'Method not allowed'}, status=405)  
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
 @csrf_exempt

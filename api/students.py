@@ -1708,36 +1708,38 @@ def get_leaderboard_data(request):
         if not event_id:
             return JsonResponse({'error': 'Event ID is required'}, status=400)
 
+        # Fetch all collections
         points_data = points_collection.find_one({"event_id": event_id})
         event_data = tasks_collection.find_one({"_id": ObjectId(event_id)})
+        mapped_event = mapped_events_collection.find_one({"event_id": event_id})
 
-        # Calculate total possible score
+        # Total possible score
         total_possible_score = 0
         if event_data and "levels" in event_data:
             for level in event_data["levels"]:
                 for task in level.get("tasks", []):
                     total_possible_score += task.get("total_points", 0)
 
-        overall_leaderboard = []
-        weekly_leaderboard = []
-        monthly_leaderboard = []
+        # Get mapped users
+        mapped_users = set()
+        if mapped_event:
+            for admin in mapped_event.get("assigned_admins", []):
+                for user in admin.get("users", []):
+                    if user.get("email"):
+                        mapped_users.add(user["email"])
 
+        # Process points data
+        scored_users = {}
         if points_data:
-            current_date = datetime.now()
-            student_emails = set()
-
             for admin in points_data.get("assigned_to", []):
                 for mark in admin.get("marks", []):
-                    student_email = mark.get("student_email")
-                    if not student_email or student_email in student_emails:
+                    email = mark.get("student_email")
+                    if not email:
                         continue
-                    student_emails.add(student_email)
 
-                    student_name = mark.get("student_name", student_email)
+                    student_name = mark.get("student_name", email)
                     total_score = 0
                     tests_taken = 0
-                    weekly_score = 0
-                    monthly_score = 0
 
                     for level in mark.get("score", []):
                         for task in level.get("task", []):
@@ -1745,22 +1747,20 @@ def get_leaderboard_data(request):
                             total_score += task_points
                             if task_points > 0:
                                 tests_taken += 1
-                            weekly_score += task_points
-                            monthly_score += task_points
 
-                    student = student_collection.find_one({"email": student_email}) or {}
+                    student = student_collection.find_one({"email": email}) or {}
+
                     average_score = total_score / tests_taken if tests_taken > 0 else 0
-
                     badge = "BRONZE"
                     if total_score >= 1000:
                         badge = "GOLD"
                     elif total_score >= 500:
                         badge = "SILVER"
 
-                    entry = {
+                    scored_users[email] = {
                         "_id": str(student.get("_id", ObjectId())),
                         "name": student.get("name", student_name),
-                        "email": student_email,
+                        "email": email,
                         "student_id": student.get("student_id", ""),
                         "total_score": total_score,
                         "tests_taken": tests_taken,
@@ -1771,26 +1771,39 @@ def get_leaderboard_data(request):
                         "total_possible_score": total_possible_score
                     }
 
-                    overall_leaderboard.append(entry)
-                    if weekly_score > 0:
-                        weekly_leaderboard.append({**entry, "total_score": weekly_score})
-                    if monthly_score > 0:
-                        monthly_leaderboard.append({**entry, "total_score": monthly_score})
+        # Merge all mapped users with score data
+        leaderboard = []
+        for email in mapped_users:
+            if email in scored_users:
+                leaderboard.append(scored_users[email])
+            else:
+                student = student_collection.find_one({"email": email}) or {}
+                leaderboard.append({
+                    "_id": str(student.get("_id", ObjectId())),
+                    "name": student.get("name", email),
+                    "email": email,
+                    "student_id": student.get("student_id", ""),
+                    "total_score": 0,
+                    "tests_taken": 0,
+                    "average_score": 0,
+                    "badge": "BRONZE",
+                    "level": 1,
+                    "status": student.get("status", "inactive"),
+                    "total_possible_score": total_possible_score
+                })
 
-            # Sort and rank
-            overall_leaderboard = assign_ranks(sorted(overall_leaderboard, key=lambda x: x["total_score"], reverse=True))
-            weekly_leaderboard = assign_ranks(sorted(weekly_leaderboard, key=lambda x: x["total_score"], reverse=True))
-            monthly_leaderboard = assign_ranks(sorted(monthly_leaderboard, key=lambda x: x["total_score"], reverse=True))
+        # Sort and rank
+        leaderboard = assign_ranks(sorted(leaderboard, key=lambda x: x["total_score"], reverse=True))
 
-        # Current student info
+        # Identify current student (if logged in)
         jwt_token = request.COOKIES.get('jwt') or request.headers.get('Authorization', '').replace('Bearer ', '')
         current_student = None
         if jwt_token:
             try:
                 payload = jwt.decode(jwt_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
                 student_email = payload.get('email')
-                for entry in overall_leaderboard:
-                    if entry["name"] == student_email or entry["student_id"] == student_email:
+                for entry in leaderboard:
+                    if entry["email"] == student_email:
                         current_student = {
                             "rank": entry["rank"],
                             "points": entry["total_score"],
@@ -1802,10 +1815,8 @@ def get_leaderboard_data(request):
 
         return JsonResponse({
             "success": True,
-            "overall": overall_leaderboard,
-            "weekly": weekly_leaderboard,
-            "monthly": monthly_leaderboard,
-            "total_students": len(overall_leaderboard),
+            "overall": leaderboard,
+            "total_students": len(leaderboard),
             "current_student": current_student or {"rank": 0, "points": 0, "total_possible_score": total_possible_score}
         }, status=200)
 
@@ -1814,6 +1825,7 @@ def get_leaderboard_data(request):
     except Exception as e:
         return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
 
+        
 @csrf_exempt
 @require_POST
 def get_student_data(request):
@@ -1945,19 +1957,20 @@ def get_student_data(request):
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid JSON in request body'}, status=400)
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)       
+        return JsonResponse({'error': str(e)}, status=500)
+       
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+import json
+from bson import ObjectId
+import jwt
+from datetime import datetime
+
+# Assuming these are defined elsewhere
+# points_collection, tasks_collection, student_collection, JWT_SECRET, JWT_ALGORITHM
 
 @csrf_exempt
 def get_leaderboard_by_level(request):
-    """
-    Fetch leaderboard data for all users under a specific event, grouped by level.
-    
-    Args:
-        request: HTTP request object containing event_id in the body.
-        
-    Returns:
-        JsonResponse containing leaderboard data for each level, total students, and current student's rank/points.
-    """
     if request.method != "POST":
         return JsonResponse({'error': 'Invalid request method'}, status=405)
     
@@ -1967,82 +1980,142 @@ def get_leaderboard_by_level(request):
         if not event_id:
             return JsonResponse({'error': 'Event ID is required'}, status=400)
 
+        # Fetch data
         points_data = points_collection.find_one({"event_id": event_id})
         event = tasks_collection.find_one({"_id": ObjectId(event_id)})
-        
+        mapped_event = mapped_events_collection.find_one({"event_id": event_id})
+
         if not event:
             return JsonResponse({'error': 'Event not found'}, status=404)
 
-        # Get number of levels from the event
         number_of_levels = len(event.get("levels", []))
         level_leaderboards = {f"level_{i+1}": [] for i in range(number_of_levels)}
         overall_leaderboard = []
 
+        # Collect mapped user emails
+        mapped_emails = set()
+        if mapped_event:
+            for admin in mapped_event.get("assigned_admins", []):
+                for user in admin.get("users", []):
+                    email = user.get("email")
+                    if email:
+                        mapped_emails.add(email)
+
+        # Collect scored users
+        scored_users = {}
         if points_data:
-            student_emails = set()
             for admin in points_data.get("assigned_to", []):
                 for mark in admin.get("marks", []):
-                    student_email = mark.get("student_email")
-                    if not student_email or student_email in student_emails:
+                    email = mark.get("student_email")
+                    if not email or email in scored_users:
                         continue
-                    student_emails.add(student_email)
-                    
-                    student_name = mark.get("student_name", student_email)
+
+                    student_name = mark.get("student_name", email)
                     total_score = 0
                     tests_taken = 0
                     level_scores = {f"level_{i+1}": 0 for i in range(number_of_levels)}
-                    
+                    latest_timestamp = None
+
                     for level in mark.get("score", []):
                         level_id = level.get("level_id")
                         level_number = next((i + 1 for i, lvl in enumerate(event.get("levels", [])) if lvl.get("level_id") == level_id), None)
                         if level_number is None:
                             continue
-                        
+
                         level_score = 0
                         for task in level.get("task", []):
                             task_points = task.get("points", 0)
                             level_score += task_points
                             if task_points > 0:
                                 tests_taken += 1
-                        
+
+                            task_timestamp = task.get("last_updated_on") or task.get("points_assigned_on")
+                            if task_timestamp:
+                                if isinstance(task_timestamp, dict) and '$date' in task_timestamp:
+                                    task_time = datetime.fromisoformat(task_timestamp['$date'].replace('Z', '+00:00'))
+                                elif isinstance(task_timestamp, datetime):
+                                    task_time = task_timestamp
+                                else:
+                                    continue
+                                if not latest_timestamp or (task_time and task_time < latest_timestamp):
+                                    latest_timestamp = task_time
+
                         level_scores[f"level_{level_number}"] = level_score
                         total_score += level_score
-                    
-                    student = student_collection.find_one({"email": student_email}) or {}
-                    
+
+                    student = student_collection.find_one({"email": email}) or {}
                     average_score = total_score / tests_taken if tests_taken > 0 else 0
-                    
+
                     badge = "BRONZE"
                     if total_score >= 1000:
                         badge = "GOLD"
                     elif total_score >= 500:
                         badge = "SILVER"
-                    
+
                     entry = {
                         "_id": str(student.get("_id", ObjectId())),
                         "name": student.get("name", student_name),
-                        "email": student_email,
+                        "email": email,
                         "student_id": student.get("student_id", ""),
                         "total_score": total_score,
                         "tests_taken": tests_taken,
                         "average_score": round(average_score, 2),
                         "badge": badge,
                         "level": level_number if level_number else 1,
-                        "status": student.get("status", mark.get("status", "active"))
+                        "status": student.get("status", mark.get("status", "active")),
+                        "timestamp": latest_timestamp.isoformat() if latest_timestamp else None
                     }
-                    
+
+                    scored_users[email] = entry
                     overall_leaderboard.append(entry)
                     for level_key in level_scores:
                         if level_scores[level_key] > 0 or tests_taken > 0:
                             level_entry = {**entry, "total_score": level_scores[level_key]}
                             level_leaderboards[level_key].append(level_entry)
 
-            # Sort and assign ranks
-            overall_leaderboard = assign_ranks(sorted(overall_leaderboard, key=lambda x: x["total_score"], reverse=True))
-            for level_key in level_leaderboards:
-                level_leaderboards[level_key] = assign_ranks(sorted(level_leaderboards[level_key], key=lambda x: x["total_score"], reverse=True))
+        # Include zero-point users from mapped list
+        for email in mapped_emails:
+            if email in scored_users:
+                continue
+            student = student_collection.find_one({"email": email}) or {}
+            entry = {
+                "_id": str(student.get("_id", ObjectId())),
+                "name": student.get("name", email),
+                "email": email,
+                "student_id": student.get("student_id", ""),
+                "total_score": 0,
+                "tests_taken": 0,
+                "average_score": 0,
+                "badge": "BRONZE",
+                "level": 1,
+                "status": student.get("status", "inactive"),
+                "timestamp": None
+            }
+            overall_leaderboard.append(entry)
 
-        # Get current student's rank
+        # Rank logic with timestamp tiebreaking
+        def assign_ranks(entries):
+            if not entries:
+                return entries
+            sorted_entries = sorted(
+                entries,
+                key=lambda x: (-x["total_score"], x["timestamp"] or "9999-12-31T23:59:59.999Z")
+            )
+            current_rank = 1
+            for i, entry in enumerate(sorted_entries):
+                if i > 0 and (
+                    sorted_entries[i]["total_score"] != sorted_entries[i-1]["total_score"] or
+                    sorted_entries[i]["timestamp"] != sorted_entries[i-1]["timestamp"]
+                ):
+                    current_rank = i + 1
+                entry["rank"] = current_rank
+            return sorted_entries
+
+        overall_leaderboard = assign_ranks(overall_leaderboard)
+        for level_key in level_leaderboards:
+            level_leaderboards[level_key] = assign_ranks(level_leaderboards[level_key])
+
+        # Current student info
         jwt_token = request.COOKIES.get('jwt') or request.headers.get('Authorization', '').replace('Bearer ', '')
         current_student = None
         if jwt_token:
@@ -2054,27 +2127,28 @@ def get_leaderboard_by_level(request):
                         current_student = {
                             "rank": entry["rank"],
                             "points": entry["total_score"],
-                            "student_id": entry["student_id"]
+                            "student_id": entry["student_id"],
+                            "timestamp": entry["timestamp"]
                         }
                         break
             except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
                 pass
-        
+
         return JsonResponse({
             "success": True,
             "overall": overall_leaderboard,
             "levels": level_leaderboards,
             "total_students": len(overall_leaderboard),
-            "current_student": current_student or {"rank": 0, "points": 0, "student_id": ""}
+            "current_student": current_student or {"rank": 0, "points": 0, "student_id": "", "timestamp": None}
         }, status=200)
-    
+
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid JSON format in request body'}, status=400)
     except Exception as e:
         import traceback
         print(f"Error in get_leaderboard_by_level: {str(e)}")
         print(traceback.format_exc())
-        return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)    
+        return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
 
 @csrf_exempt
 def total_points_of_user(request):
@@ -2121,12 +2195,13 @@ def total_points_of_user(request):
                             for task in score.get("task", []):
                                 task_name = task.get("task_name") or "Unnamed Task"
                                 points = task.get("points", 0)
+                                status = task.get("status", "").strip().lower()
 
                                 # Count every task (allocated)
                                 result["total_tasks_allocated"] += 1
 
-                                # Count completed task only if score > 0
-                                if points > 0:
+                                # Count completed task only if status is "completely_finished"
+                                if status == "completely_finished":
                                     result["total_tasks_completed"] += 1
 
                                 # Build nested dict if missing
@@ -2135,8 +2210,11 @@ def total_points_of_user(request):
                                 if level_name not in result["task_points_from"][event_name]:
                                     result["task_points_from"][event_name][level_name] = {}
 
-                                # Store points per task
-                                result["task_points_from"][event_name][level_name][task_name] = points
+                                # Store both points and status per task
+                                result["task_points_from"][event_name][level_name][task_name] = {
+                                    "points": points,
+                                    "status": status
+                                }
 
                                 # Sum up total user points
                                 result["total_user_points"] += points
@@ -2155,6 +2233,7 @@ def total_points_of_user(request):
         return JsonResponse({'error': 'Invalid token'}, status=401)
     except Exception as e:
         return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
+    
 
 @csrf_exempt
 def students_point_by_eventid(request):
@@ -2182,7 +2261,7 @@ def students_point_by_eventid(request):
         if not student_email:
             return JsonResponse({"error": "Invalid token. Email not found."}, status=400)
 
-        # Step 1: Get student earned points from points_collection
+        # Step 1: Fetch student score from points_collection
         points_doc = points_collection.find_one({"event_id": event_id})
         if not points_doc:
             return JsonResponse({"error": "Event not found in points_collection"}, status=404)
@@ -2197,41 +2276,69 @@ def students_point_by_eventid(request):
                         if level.get("level_id") == level_id:
                             student_scores = level.get("task", [])
                             break
+                    break
 
         if not student_scores:
             return JsonResponse({"error": "No task scores found for the student at this level"}, status=404)
 
-        # Step 2: Get total points for each task from tasks_collection
+        # Step 2: Fetch level data from tasks_collection
         task_doc = tasks_collection.find_one({"_id": ObjectId(event_id)})
         if not task_doc:
             return JsonResponse({"error": "Event not found in tasks_collection"}, status=404)
 
-        task_map = {}
+        task_schema_map = {}
         for level in task_doc.get("levels", []):
             if level.get("level_id") == level_id:
                 for task in level.get("tasks", []):
-                    task_map[task["task_id"]] = {
+                    subtask_map = {
+                        sub["subtask_id"]: {
+                            "name": sub.get("name", "Unknown Subtask"),
+                            "points": sub.get("points", 0)
+                        }
+                        for sub in task.get("subtasks", [])
+                    }
+                    task_schema_map[task["task_id"]] = {
                         "task_name": task.get("task_name", "Unknown Task"),
-                        "total_points": task.get("total_points", 0)
+                        "total_points": task.get("total_points", 0),
+                        "subtasks": subtask_map
                     }
 
-        # Step 3: Build final result
+        # Step 3: Build final response
         task_results = []
         for score in student_scores:
             task_id = score.get("task_id")
             earned = score.get("points", 0)
-            task_info = task_map.get(task_id, {})
+            task_info = task_schema_map.get(task_id, {})
 
             total = task_info.get("total_points", 0)
             task_name = task_info.get("task_name", "Unknown Task")
             progress = round((earned / total) * 100, 2) if total > 0 else 0.0
+
+            # Handle subtasks (optional)
+            subtasks_output = []
+            for subtask in score.get("sub_task", []):
+                sub_id = subtask.get("subtask_id")
+                sub_name = subtask.get("subtask_name")
+                earned_sub_points = subtask.get("points", 0)
+                schema_sub = task_info.get("subtasks", {}).get(sub_id, {})
+                total_sub_points = schema_sub.get("points", 0)
+                sub_progress = round((earned_sub_points / total_sub_points) * 100, 2) if total_sub_points > 0 else 0.0
+
+                subtasks_output.append({
+                    "subtask_id": sub_id,
+                    "subtask_name": sub_name,
+                    "earned_points": earned_sub_points,
+                    "total_points": total_sub_points,
+                    "progress_percent": sub_progress
+                })
 
             task_results.append({
                 "task_id": task_id,
                 "task_name": task_name,
                 "earned_points": earned,
                 "total_points": total,
-                "progress_percent": progress
+                "progress_percent": progress,
+                "subtasks": subtasks_output  # Optional
             })
 
         return JsonResponse({
@@ -2243,7 +2350,9 @@ def students_point_by_eventid(request):
         }, status=200)
 
     except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+        return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
+    
+
 
 @csrf_exempt
 def validate_reset_token_for_student(request):
@@ -2529,146 +2638,6 @@ def student_recent_tasks_by_event(request):
         return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
 
 @csrf_exempt
-def student_recent_tasks_by_event(request):
-    """
-    Fetch recent tasks in an event, based on logged-in student info and event_id.
-    Now includes total points grouped by event for the student,
-    and only lists incomplete tasks.
-    """
-    if request.method != 'POST':
-        return JsonResponse({"error": "Only POST method allowed"}, status=405)
-
-    try:
-        data = json.loads(request.body)
-        token = data.get('jwt')
-        event_id = data.get('event_id')
-
-        if not token or not event_id:
-            return JsonResponse({"error": "Missing jwt or event_id"}, status=400)
-
-        # Decode JWT
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            student_email = payload.get('email')
-            student_name = payload.get('name')
-        except jwt.ExpiredSignatureError:
-            return JsonResponse({"error": "Token expired"}, status=401)
-        except jwt.InvalidTokenError:
-            return JsonResponse({"error": "Invalid token"}, status=401)
-
-        if not student_email or not student_name:
-            return JsonResponse({"error": "Invalid token payload"}, status=400)
-
-        # Find the event in the events_collection
-        event_doc = tasks_collection.find_one({"_id": ObjectId(event_id)})
-        if not event_doc:
-            return JsonResponse({"error": "Event not found"}, status=404)
-
-        # === Fetch task completion status from Points collection ===
-        completed_task_ids = set()
-
-        points_data = db['Points'].find_one({"event_id": event_id})
-        if points_data:
-            for admin in points_data.get("assigned_to", []):
-                for student in admin.get("marks", []):
-                    if student.get("student_email") == student_email:
-                        for level in student.get("score", []):
-                            for task in level.get("task", []):
-                                if task.get("status") == "completely_finished":
-                                    completed_task_ids.add(task.get("task_id"))
-
-        # === Collect tasks data ===
-        recent_tasks = []
-        event_name = event_doc.get("event_name")
-        start_date = event_doc.get("start_date")
-        end_date = event_doc.get("end_date")
-
-        for level in event_doc.get("levels", []):
-            level_id = level.get("level_id")
-            level_name = level.get("level_name")
-
-            for task in level.get("tasks", []):
-                task_id = task.get("task_id")
-
-                # ✅ Skip completed tasks
-                if task_id in completed_task_ids:
-                    continue
-
-                task_obj = {
-                    "task_id": task_id,
-                    "task_name": task.get("task_name"),
-                    "description": task.get("description"),
-                    "total_points": task.get("total_points"),
-                    "deadline": task.get("deadline"),
-                    "deadline_time": task.get("deadline_time"),
-                    "full_deadline": task.get("full_deadline"),
-                    "frequency": task.get("frequency"),
-                    "start_date": task.get("start_date"),
-                    "end_date": task.get("end_date"),
-                    "task_status": task.get("task_status"),
-                    "created_at": task.get("created_at").isoformat() if task.get("created_at") else None,
-                    "updated_at": task.get("updated_at").isoformat() if task.get("updated_at") else None,
-                    "level_id": level_id,
-                    "level_name": level_name,
-                    "subtasks": []
-                }
-
-                for sub in task.get("subtasks", []):
-                    subtask_obj = {
-                        "subtask_id": sub.get("subtask_id"),
-                        "name": sub.get("name"),
-                        "description": sub.get("description"),
-                        "points": sub.get("points"),
-                        "deadline": sub.get("deadline"),
-                        "deadline_time": sub.get("deadline_time"),
-                        "full_deadline": sub.get("full_deadline"),
-                        "status": sub.get("status"),
-                        "completion_history": sub.get("completion_history", [])
-                    }
-                    task_obj["subtasks"].append(subtask_obj)
-
-                recent_tasks.append(task_obj)
-
-        # Sort tasks by created_at descending
-        recent_tasks.sort(key=lambda x: x["created_at"] or '', reverse=True)
-
-        # === Points Summary ===
-        total_points_earned = 0
-        total_possible_points = 0
-
-        for level in event_doc.get("levels", []):
-            for task in level.get("tasks", []):
-                total_possible_points += task.get("total_points", 0)
-
-        if points_data:
-            for admin in points_data.get("assigned_to", []):
-                for student in admin.get("marks", []):
-                    if student.get("student_email") == student_email:
-                        for score in student.get("score", []):
-                            for task in score.get("task", []):
-                                total_points_earned += task.get("points", 0)
-
-        return JsonResponse({
-            "student_email": student_email,
-            "student_name": student_name,
-            "event_id": event_id,
-            "event_name": event_name,
-            "start_date": start_date,
-            "end_date": end_date,
-            "total_points_summary": {
-                "earned": total_points_earned,
-                "possible": total_possible_points,
-                "completion_percentage": round((total_points_earned / total_possible_points) * 100) if total_possible_points else 0
-            },
-            "recent_tasks": recent_tasks
-        }, status=200)
-
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
-    
-@csrf_exempt
 def student_events_list(request):
     if request.method != 'POST':
         return JsonResponse({"error": "Invalid request method."}, status=405)
@@ -2677,7 +2646,6 @@ def student_events_list(request):
         data = json.loads(request.body)
         token = data.get('jwt')
 
-        # Decode JWT
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         student_email = payload.get('email')
         student_name = payload.get('name')
@@ -2707,34 +2675,52 @@ def student_events_list(request):
             all_task_ids = []
             level_details = []
 
+            # Step 1: Collect all task IDs and structure levels
             for level in task_doc.get("levels", []):
                 level_id = level.get("level_id")
                 level_name = level.get("level_name")
-                level_tasks = []
+                tasks = []
 
                 for task in level.get("tasks", []):
                     task_id = task.get("task_id")
+                    task_name = task.get("task_name")
+                    subtasks = task.get("subtasks", [])
+
                     all_task_ids.append(task_id)
 
-                    task_data = {
-                        "task_id": task_id,
-                        "task_name": task.get("task_name"),
-                        "status": None,
-                        "subtasks": task.get("subtasks", [])
-                    }
+                    # Prepare subtask structure
+                    subtask_details = []
+                    for sub in subtasks:
+                        subtask_details.append({
+                            "subtask_id": sub.get("subtask_id"),
+                            "name": sub.get("name"),
+                            "description": sub.get("description"),
+                            "points": sub.get("points"),
+                            "deadline": sub.get("deadline"),
+                            "deadline_time": sub.get("deadline_time"),
+                            "full_deadline": sub.get("full_deadline"),
+                            "status": "incomplete",
+                            "completion_history": sub.get("completion_history", [])
+                        })
 
-                    level_tasks.append(task_data)
+                    tasks.append({
+                        "task_id": task_id,
+                        "task_name": task_name,
+                        "status": "incomplete",  # Default status
+                        "subtasks": subtask_details
+                    })
 
                 level_details.append({
                     "level_id": level_id,
                     "level_name": level_name,
-                    "tasks": level_tasks
+                    "tasks": tasks
                 })
 
-            # Get completed tasks from points
+            # Step 2: Get completion status from points_collection
             points_doc = points_collection.find_one({"event_id": event_id})
             completed_task_ids = set()
             task_status_map = {}
+            subtask_status_map = {}
 
             if points_doc:
                 for admin in points_doc.get("assigned_to", []):
@@ -2743,17 +2729,60 @@ def student_events_list(request):
                             for score in mark.get("score", []):
                                 for task in score.get("task", []):
                                     task_id = task.get("task_id")
-                                    status = task.get("status")
-                                    task_status_map[task_id] = status
-                                    if status == "completely_finished":
-                                        completed_task_ids.add(task_id)
+                                    subtasks = task.get("sub_task", [])
 
-            # Inject status into tasks
+                                    if subtasks:
+                                        # Process subtasks
+                                        subtask_statuses = []
+                                        subtask_status_dict = {}
+                                        
+                                        for subtask in subtasks:
+                                            subtask_id = subtask.get("subtask_id")
+                                            status = subtask.get("status", "incomplete")
+                                            subtask_statuses.append(status)
+                                            subtask_status_dict[subtask_id] = status
+                                        
+                                        # Store subtask statuses for this task
+                                        if task_id not in subtask_status_map:
+                                            subtask_status_map[task_id] = {}
+                                        subtask_status_map[task_id].update(subtask_status_dict)
+
+                                        # Determine task status based on subtask statuses
+                                        completely_finished_count = subtask_statuses.count("completely_finished")
+                                        partially_finished_count = subtask_statuses.count("partially_finished")
+                                        incomplete_count = subtask_statuses.count("incomplete")
+                                        
+                                        if completely_finished_count == len(subtask_statuses):
+                                            # All subtasks are completely finished
+                                            task_status_map[task_id] = "completely_finished"
+                                            completed_task_ids.add(task_id)
+                                        elif completely_finished_count > 0 or partially_finished_count > 0:
+                                            # At least one subtask is partially or completely finished
+                                            task_status_map[task_id] = "partially_finished"
+                                        else:
+                                            # All subtasks are incomplete
+                                            task_status_map[task_id] = "incomplete"
+                                    else:
+                                        # Task without subtasks
+                                        status = task.get("status", "incomplete")
+                                        task_status_map[task_id] = status
+                                        if status == "completely_finished":
+                                            completed_task_ids.add(task_id)
+
+            # Step 3: Update level_details with status
             for level in level_details:
                 for task in level["tasks"]:
-                    task_id = task.get("task_id")
-                    task["status"] = task_status_map.get(task_id, "not_started")
+                    task_id = task["task_id"]
+                    # Update task status
+                    task["status"] = task_status_map.get(task_id, "incomplete")
 
+                    # Update subtask statuses
+                    if task_id in subtask_status_map:
+                        for subtask in task["subtasks"]:
+                            subtask_id = subtask["subtask_id"]
+                            subtask["status"] = subtask_status_map[task_id].get(subtask_id, "incomplete")
+
+            # Step 4: Final check — if not all tasks completed, it's a recent event
             if not all(task_id in completed_task_ids for task_id in all_task_ids):
                 recent_events.append({
                     "event_id": event_id,
@@ -2769,6 +2798,7 @@ def student_events_list(request):
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+    
 
 @csrf_exempt
 def get_student_levels_progress(request):
@@ -2777,114 +2807,146 @@ def get_student_levels_progress(request):
 
     try:
         data = json.loads(request.body)
+        token = data.get('jwt')
         event_id = data.get('event_id')
-        email = data.get('email')
 
-        if not event_id or not email:
-            return JsonResponse({'error': 'event_id and email are required'}, status=400)
+        if not token or not event_id:
+            return JsonResponse({'error': 'JWT token and event_id are required'}, status=400)
 
-        # Collections
-        events_collection = db['events']
-        points_collection = db['Points']
+        # Decode JWT
+        try:
+            decoded_token = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            student_email = decoded_token.get("email")
+        except jwt.ExpiredSignatureError:
+            return JsonResponse({'error': 'JWT token has expired'}, status=401)
+        except jwt.InvalidTokenError:
+            return JsonResponse({'error': 'Invalid JWT token'}, status=401)
 
+        if not student_email:
+            return JsonResponse({'error': 'Invalid token. Email not found.'}, status=400)
+
+        # Check if mapped
+        mapping_doc = mapped_events_collection.find_one({
+            "assigned_admins.users.email": student_email,
+            "event_id": event_id
+        })
+
+        if not mapping_doc:
+            return JsonResponse({'error': 'This event is not mapped to the student'}, status=404)
+
+        # Get event details
         try:
             obj_id = ObjectId(event_id)
         except Exception as e:
             return JsonResponse({'error': f'Invalid event_id: {str(e)}'}, status=400)
 
-        # Find the event doc
-        event = events_collection.find_one({'_id': obj_id})
+        event = tasks_collection.find_one({'_id': obj_id})
         if not event:
-            return JsonResponse({'error': 'Event not found'}, status=404)
+            return JsonResponse({'error': 'Event not found in task collection'}, status=404)
 
         event_name = event.get('event_name')
         levels = event.get('levels', [])
         created_at = event.get('created_at')
         updated_at = event.get('updated_at')
 
-        # Find Points doc
+        # Total event allocated points
+        total_event_allocated_points = sum(level.get('total_points', 0) for level in levels)
+
+        # Get student points
         points_doc = points_collection.find_one({'event_id': event_id})
-        if not points_doc:
-            return JsonResponse({'error': 'Points data not found for this event'}, status=404)
-
-        # Find student marks
         student_marks = None
-        for admin in points_doc.get('assigned_to', []):
-            for student in admin.get('marks', []):
-                if student.get('student_email') == email:
-                    student_marks = student
+
+        if points_doc:
+            for admin in points_doc.get('assigned_to', []):
+                for mark in admin.get('marks', []):
+                    if mark.get('student_email') == student_email:
+                        student_marks = mark
+                        break
+                if student_marks:
                     break
-            if student_marks:
-                break
 
-        if not student_marks:
-            return JsonResponse({'error': 'Student marks not found for this event'}, status=404)
-
-        level_list = []
-        total_points = 0
+        level_data = []
+        total_event_points = 0
 
         for level in levels:
             level_id = level.get('level_id')
             level_name = level.get('level_name')
+            total_level_points = level.get('total_points', 0)
 
-            # Find matching student score for this level
-            student_level_score = next((s for s in student_marks.get('score', []) if s.get('level_id') == level_id), None)
+            # Create task schema lookup
+            task_schema_map = {t['task_id']: t for t in level.get('tasks', [])}
 
+            # Find student score for this level
+            student_level_score = None
+            if student_marks:
+                student_level_score = next(
+                    (s for s in student_marks.get('score', []) if s.get('level_id') == level_id), None
+                )
+
+            tasks_output = []
             level_points = 0
-            tasks_data = []
 
             if student_level_score:
-                for task in student_level_score.get('task', []):
-                    task_id = task.get('task_id')
-                    task_name = task.get('task_name')
+                for student_task in student_level_score.get('task', []):
+                    task_id = student_task.get('task_id')
+                    task_name = student_task.get('task_name')
+                    schema_task = task_schema_map.get(task_id, {})
+                    task_total_points = schema_task.get('total_points', 0)
+                    subtask_schema_map = {
+                        st['subtask_id']: st for st in schema_task.get('subtasks', [])
+                    }
 
-                    # Sum subtasks points
-                    subtasks = []
-                    subtasks_points = 0
+                    task_points = 0
+                    subtasks_output = []
+                    sub_tasks = student_task.get('sub_task', [])
 
-                    for subtask in task.get('sub_task', []):
-                        subtask_points = subtask.get('points', 0)
-                        subtasks_points += subtask_points
+                    if sub_tasks:
+                        for subtask in sub_tasks:
+                            subtask_id = subtask.get('subtask_id')
+                            subtask_points = subtask.get('points', 0)
+                            task_points += subtask_points
+                            schema_sub = subtask_schema_map.get(subtask_id, {})
+                            subtasks_output.append({
+                                'subtask_id': subtask_id,
+                                'subtask_name': subtask.get('subtask_name'),
+                                'points': subtask_points,
+                                'status': subtask.get('status'),
+                                'subtask_total_points': schema_sub.get('points', 0)
+                            })
+                    else:
+                        # No subtasks → take task-level points directly
+                        task_points = student_task.get('points', 0)
 
-                        subtasks.append({
-                            'subtask_id': subtask.get('subtask_id'),
-                            'subtask_name': subtask.get('subtask_name'),
-                            'points': subtask_points,
-                            'status': subtask.get('status')
-                        })
-
-                    # Task points = sum of subtasks points
-                    task_points = subtasks_points
-                    level_points += task_points
-
-                    tasks_data.append({
+                    tasks_output.append({
                         'task_id': task_id,
                         'task_name': task_name,
                         'points': task_points,
-                        'subtasks': subtasks
+                        'task_total_points': task_total_points,
+                        'subtasks': subtasks_output
                     })
 
-            # Add this level data
-            level_list.append({
+                    level_points += task_points
+
+            level_data.append({
                 'level_id': level_id,
                 'level_name': level_name,
-                'event_id': event_id,
-                'event_name': event_name,
                 'points': level_points,
-                'tasks': tasks_data,
-                'created_at': created_at.isoformat() if isinstance(created_at, datetime) else str(created_at),
-                'updated_at': updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at)
+                'total_level_points': total_level_points,
+                'tasks': tasks_output
             })
 
-            total_points += level_points
+            total_event_points += level_points
 
         return JsonResponse({
             'success': True,
-            'email': email,
+            'student_email': student_email,
             'event_id': event_id,
             'event_name': event_name,
-            'levels': level_list,
-            'total_points': total_points
+            'total_points': total_event_points,
+            'total_event_allocated_points': total_event_allocated_points,
+            'created_at': created_at.isoformat() if isinstance(created_at, datetime) else str(created_at),
+            'updated_at': updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at),
+            'levels': level_data
         }, status=200)
 
     except Exception as e:
