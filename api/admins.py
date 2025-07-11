@@ -236,7 +236,7 @@ def admin_signup(request):
             result = admin_collection.insert_one(admin_user)
 
             # Send the secure, one-time link to set the password
-            setup_link = f'https://snsct-leaderboard.vercel.app/admin/setup-password?token={token}'
+            setup_link = f'http://localhost:5173/admin/setup-password?token={token}'
             send_mail(
                 subject='Set your password for AI exam analyzer',
                 message=f"""
@@ -1639,11 +1639,13 @@ def get_students_by_event_and_admin(request, event_id, admin_id):
 #     else:
 #         return JsonResponse({"error": "Invalid request method"}, status=405)
        
+
 @csrf_exempt
 def manage_task_points(request, event_id, task_id):
     """
     GET: Retrieve points for students in a specific task for the logged-in admin.
     POST: Store student points inside the assigned_to → marks of the specific admin.
+    Also handles attendance tracking if enabled for the event.
     """
     try:
         # ✅ Extract admin ID from JWT token
@@ -1657,7 +1659,6 @@ def manage_task_points(request, event_id, task_id):
         admin_name = decoded.get("name", "Unknown Admin")
         print("📩 Admin ID from token:", admin_name)    
         now_timestamp = datetime.utcnow()  
-
 
         if not admin_id:
             return JsonResponse({"error": "Invalid token payload"}, status=400)
@@ -1674,8 +1675,17 @@ def manage_task_points(request, event_id, task_id):
             # ✅ Get ALL students assigned to this admin for this event
             mapped_doc = mapped_events_collection.find_one({"event_id": str(event_id)})
             all_students = []
+            attendance_required = False
+            attendance_points = 0
             
             if mapped_doc:
+                # Check if attendance tracking is enabled for this event
+                event_details = tasks_collection.find_one({"_id": ObjectId(event_id)})
+                if event_details:
+                    attendance_tracking = event_details.get("attendance_tracking", {})
+                    attendance_required = attendance_tracking.get("required", False)
+                    attendance_points = attendance_tracking.get("points", 0)
+                
                 admin_entry_mapped = next(
                     (admin for admin in mapped_doc.get("assigned_admins", []) 
                      if admin.get("admin_id") == admin_id),
@@ -1695,39 +1705,26 @@ def manage_task_points(request, event_id, task_id):
                                 "roll_no": student.get("student_id"),
                                 "department": student.get("department")
                             })
-                            
 
             # ✅ Get the task details from tasks collection to find all subtasks
             event_doc_task = tasks_collection.find_one({"_id": ObjectId(event_id)})
             subtasks_for_task = []
             task_found = False
+            current_task_frequency = "Once"  # Default frequency
 
-            # ✅ Frequency map setup for levels + subtasks extraction
-            level_frequency_map = {}
+            # ✅ Find the specific task and its frequency
             if event_doc_task:
                 for level in event_doc_task.get("levels", []):
-                    level_id_inner = level.get("level_id")
-                    frequency = None
-                    
-                    # Get frequency from ANY task in this level
-                    for task in level.get("tasks", []):
-                        if task.get("frequency"):
-                            frequency = task.get("frequency")
-                            break  # Use the first frequency found in this level
-
-                    # Check if this level contains our target task
                     for task in level.get("tasks", []):
                         if task.get("task_id") == task_id:
                             subtasks_for_task = task.get("subtasks", [])
+                            current_task_frequency = task.get("frequency", "Once")
                             task_found = True
                             break
+                    if task_found:
+                        break
 
-                    if level_id_inner:
-                        level_frequency_map[level_id_inner] = frequency
-
-
-
-            # ✅ Get existing points data
+            # ✅ Get existing points data and attendance data
             task_points = []
             event_doc = points_collection.find_one({"event_id": str(event_id)})
             
@@ -1740,6 +1737,11 @@ def manage_task_points(request, event_id, task_id):
                         student_email = student.get("email")
                         student_status = "incomplete"
                         student_points = 0
+                        attendance_info = {
+                            "earned_points": 0,
+                            "current_streak": 0,
+                            "history": []
+                        }
                         
                         if event_doc:
                             admin_entry = next(
@@ -1750,6 +1752,7 @@ def manage_task_points(request, event_id, task_id):
                             if admin_entry:
                                 for student_mark in admin_entry.get("marks", []):
                                     if student_mark.get("student_email") == student_email:
+                                        # Get task points
                                         for level in student_mark.get("score", []):
                                             for task in level.get("task", []):
                                                 if task.get("task_id") == task_id:
@@ -1758,6 +1761,14 @@ def manage_task_points(request, event_id, task_id):
                                                             student_status = sub_task.get("status", "incomplete")
                                                             student_points = sub_task.get("points", 0)
                                                             break
+                                        
+                                        # Get attendance info
+                                        if "attendance" in student_mark:
+                                            attendance_info = {
+                                                "earned_points": student_mark["attendance"].get("earned_points", 0),
+                                                "current_streak": student_mark["attendance"].get("current_streak", 0),
+                                                "history": student_mark["attendance"].get("history", [])
+                                            }
                         
                         task_points.append({
                             "roll_no": student.get("roll_no", student_email.split("@")[0]),
@@ -1768,16 +1779,26 @@ def manage_task_points(request, event_id, task_id):
                             "subtask_id": subtask_id,
                             "subtask_name": subtask.get("name", ""),
                             "time": None,
-                            "updated_time": None
+                            "updated_time": None,
+                            "attendance": {
+                                "required": attendance_required,
+                                "total_points": attendance_points,
+                                "earned_points": attendance_info["earned_points"],
+                                "current_streak": attendance_info["current_streak"],
+                                "history": attendance_info["history"]
+                            }
                         })
-                        
-                        print(f"Added point entry: roll_no={student.get('roll_no', student_email.split('@')[0])}, status={student_status}, subtask_id={subtask_id}")
             else:
                 # Handle tasks without subtasks
                 for student in all_students:
                     student_email = student.get("email")
                     student_status = "incomplete"
                     student_points = 0
+                    attendance_info = {
+                        "earned_points": 0,
+                        "current_streak": 0,
+                        "history": []
+                    }
                     
                     if event_doc:
                         admin_entry = next(
@@ -1788,13 +1809,22 @@ def manage_task_points(request, event_id, task_id):
                         if admin_entry:
                             for student_mark in admin_entry.get("marks", []):
                                 if student_mark.get("student_email") == student_email:
+                                    # Get task points
                                     for level in student_mark.get("score", []):
                                         for task in level.get("task", []):
                                             if task.get("task_id") == task_id and not task.get("sub_task"):
                                                 student_status = task.get("status", "incomplete")
                                                 student_points = task.get("points", 0)
                                                 break
-                        
+                                    
+                                    # Get attendance info
+                                    if "attendance" in student_mark:
+                                        attendance_info = {
+                                            "earned_points": student_mark["attendance"].get("earned_points", 0),
+                                            "current_streak": student_mark["attendance"].get("current_streak", 0),
+                                            "history": student_mark["attendance"].get("history", [])
+                                        }
+                    
                     task_points.append({
                         "roll_no": student.get("roll_no", student_email.split("@")[0]),
                         "student_name": student.get("name"),
@@ -1804,13 +1834,31 @@ def manage_task_points(request, event_id, task_id):
                         "subtask_id": None,
                         "subtask_name": None,
                         "time": None,
-                        "updated_time": None
+                        "updated_time": None,
+                        "attendance": {
+                            "required": attendance_required,
+                            "total_points": attendance_points,
+                            "earned_points": attendance_info["earned_points"],
+                            "current_streak": attendance_info["current_streak"],
+                            "history": attendance_info["history"]
+                        }
                     })
-                    
-                    print(f"Added point entry: roll_no={student.get('roll_no', student_email.split('@')[0])}, status={student_status}, task_id={task_id}")
 
-            print(f"level_frequency: {level_frequency_map}")
-            return JsonResponse({"points": task_points,"level_frequency": level_frequency_map}, status=200)
+            # Create task frequency map for the response
+            task_frequency_map = {
+                "task_id": task_id,
+                "frequency": current_task_frequency
+            }
+            
+            print(f"task_frequency: {current_task_frequency}")
+            return JsonResponse({
+                "points": task_points,
+                "task_frequency": task_frequency_map,
+                "attendance_tracking": {
+                    "required": attendance_required,
+                    "points": attendance_points
+                }
+            }, status=200)
 
         except Exception as e:
             import traceback
@@ -1831,39 +1879,105 @@ def manage_task_points(request, event_id, task_id):
             subtask_id = data.get("subtask_id")
             subtask_name = data.get("subtask_name", "")
             students = data.get("students", [])
+            
+            # Validate required fields
+            if not all([event_id, task_id, students]):
+                return JsonResponse({"error": "Missing required fields"}, status=400)
+
+            # Get event details to check for attendance tracking
+            event_doc_task = tasks_collection.find_one({"_id": ObjectId(event_id)})
+            if not event_doc_task:
+                return JsonResponse({"error": "Event not found"}, status=404)
+                
+            # Check if attendance tracking is enabled
+            attendance_tracking = event_doc_task.get("attendance_tracking", {})
+            attendance_required = attendance_tracking.get("required", False)
+            attendance_points = attendance_tracking.get("points", 0)
+            
+            # Automatically enable attendance marking if attendance tracking is required
+            # But still respect the explicit mark_attendance setting from the client if provided
+            attendance_data = data.get("attendance", {})
+            mark_attendance = attendance_data.get("mark_attendance", attendance_required)
+            
+            # Use current date automatically instead of requiring it in the request
+            record_date = datetime.now().strftime("%Y-%m-%d")
+
 
             # Validate required fields
             if not all([event_id, task_id, students]):
                 return JsonResponse({"error": "Missing required fields"}, status=400)
 
-            # Check if task has subtasks
+            # Get event details to check for attendance tracking
             event_doc_task = tasks_collection.find_one({"_id": ObjectId(event_id)})
-            subtasks_for_task = []
-            task_found = False
+            if not event_doc_task:
+                return JsonResponse({"error": "Event not found"}, status=404)
+                
+            # Check if attendance tracking is enabled
+            attendance_tracking = event_doc_task.get("attendance_tracking", {})
+            attendance_required = attendance_tracking.get("required", False)
+            attendance_points = attendance_tracking.get("points", 0)
+            
+            # Automatically enable attendance marking if attendance tracking is required
+            # But still respect the explicit mark_attendance setting from the client if provided
+            attendance_data = data.get("attendance", {})
+            mark_attendance = attendance_data.get("mark_attendance", attendance_required)
+            
+            # Use current date automatically instead of requiring it in the request
+            now_dt = datetime.now()
+            record_date = now_dt.strftime("%Y-%m-%d")
+            
+            # Find the specific task and its frequency
+            event_frequency = "Once"  # Default
+            event_start_date = None
+            event_end_date = None
+            total_days = 1
+            current_task = None
 
-            # ✅ Frequency map setup for levels + subtasks extraction
-            level_frequency_map = {}
-            if event_doc_task:
-                print(f"🔍 POST: Building frequency map for event_id: {event_id}")
+            # First, find the specific task we're working with
+            for level in event_doc_task.get("levels", []):
+                for task in level.get("tasks", []):
+                    if task.get("task_id") == task_id:
+                        current_task = task
+                        break
+                if current_task:
+                    break
+
+            # If we found the task, use its frequency directly
+            if current_task:
+                event_frequency = current_task.get("frequency", "Once")
+                print(f"📊 Found task '{task_name}' with frequency: {event_frequency}")
+                if current_task.get("start_date"):
+                    event_start_date = datetime.strptime(current_task.get("start_date"), "%Y-%m-%d").date()
+                if current_task.get("end_date"):
+                    event_end_date = datetime.strptime(current_task.get("end_date"), "%Y-%m-%d").date()
+            else:
+                print(f"⚠️ Task with ID '{task_id}' not found in event document")
+                # Fallback to scanning all tasks if specific task not found
                 for level in event_doc_task.get("levels", []):
-                    level_id_inner = level.get("level_id")
-                    frequency = None
-                    print(f"🔍 POST: Processing level_id: {level_id_inner}")
-                    
-                    # Get frequency from ANY task in this level
-                    for task in level.get("tasks", []):
-                        if task.get("frequency"):
-                            frequency = task.get("frequency")
-                            print(f"🔍 POST: Found frequency: {frequency} for level: {level_id_inner}")
-                            break  # Use the first frequency found in this level
-
-                    # Check if this level contains our target task
                     for task in level.get("tasks", []):
                         if task.get("task_id") == task_id:
-                            subtasks_for_task = task.get("subtasks", [])
-                            task_found = True
-                            print(f"🔍 POST: Found target task_id: {task_id} in level: {level_id_inner}")
+                            event_frequency = task.get("frequency", "Once")
+                            if task.get("start_date"):
+                                event_start_date = datetime.strptime(task.get("start_date"), "%Y-%m-%d").date()
+                            if task.get("end_date"):
+                                event_end_date = datetime.strptime(task.get("end_date"), "%Y-%m-%d").date()
                             break
+
+            # Calculate total days
+            if event_start_date and event_end_date:
+                total_days = (event_end_date - event_start_date).days + 1
+                print(f"📅 Task runs for {total_days} days from {event_start_date} to {event_end_date}")
+            
+            # Calculate points per attendance based on frequency
+            points_per_attendance = calculate_points_per_attendance(attendance_points, event_frequency, total_days)
+            print(f"💯 Points per attendance: {points_per_attendance} (based on {event_frequency} frequency)")
+
+            # Check for subtasks
+            subtasks_for_task = []
+            task_found = False
+            if current_task:
+                subtasks_for_task = current_task.get("subtasks", [])
+                task_found = True
 
             # Determine if this is a task with subtasks or without
             has_subtasks = len(subtasks_for_task) > 0
@@ -1897,6 +2011,7 @@ def manage_task_points(request, event_id, task_id):
                 event_doc = points_collection.find_one({"event_id": event_id})
 
             updated = False
+            attendance_updated = False
 
             # Find or create admin entry
             admin_entry = next(
@@ -1912,39 +2027,43 @@ def manage_task_points(request, event_id, task_id):
                 event_doc.setdefault("assigned_to", []).append(admin_entry)
                 updated = True
 
-            # Add or update marks for each student
+            # Process students
+            attendance_results = []
             for student in students:
                 student_email = student.get("student_email")
                 student_name = student.get("student_name")
                 points = student.get("points", 0)
                 status = student.get("status", "incomplete")
+                # Automatically determine if student is present based on status
+                # Consider "completed", "partially_finished", and "completely_finished" as present
+                present = student.get("present", status in ["completed", "partially_finished", "completely_finished"])
+                
+                # Initialize attendance result for this student if needed
+                if mark_attendance and attendance_required:
+                    attendance_result = {
+                        "student_email": student_email,
+                        "present": present,
+                        "points_earned": 0,
+                        "current_streak": 0,
+                        "updated": False
+                    }
+                    attendance_results.append(attendance_result)
 
                 if not student_email:
                     continue
 
                 print(f"Processing student: {student_email}, status: {status}, points: {points}")
 
+                # Store reference to the current student record for attendance handling
+                current_student_record = None
+                
                 student_found = False
                 for s in admin_entry.get("marks", []):
                     if s["student_email"] == student_email:
+                        current_student_record = s  # Store reference for later use
                         student_found = True
                         
-                        # ✅ FIRST: Update frequency for ALL existing levels for this student
-                        for level in s.get("score", []):
-                            existing_level_id = level.get("level_id")
-                            expected_frequency = level_frequency_map.get(existing_level_id)
-                            current_frequency = level.get("frequency")
-                            
-                            if current_frequency != expected_frequency:
-                                level["frequency"] = expected_frequency
-                                print(f"🔁 Updated frequency for existing level {existing_level_id}: {current_frequency} -> {expected_frequency}")
-                                updated = True
-                            elif "frequency" not in level and expected_frequency is not None:
-                                level["frequency"] = expected_frequency
-                                print(f"🆕 Added missing frequency for level {existing_level_id} -> {expected_frequency}")
-                                updated = True
-                        
-                        # ✅ SECOND: Process the specific level for the current task
+                        # ✅ Process the specific level for the current task
                         level_found = False
                         for level in s.get("score", []):
                             if level["level_id"] == level_id:
@@ -1953,6 +2072,16 @@ def manage_task_points(request, event_id, task_id):
                                 task_found = False
                                 for task in level.get("task", []):
                                     if task["task_id"] == task_id:
+                                        # Store task frequency directly in the task object
+                                        if task.get("frequency") != event_frequency:
+                                            task["frequency"] = event_frequency
+                                            print(f"🔄 Updated frequency for task {task_id} to {event_frequency}")
+                                            updated = True
+                                        elif "frequency" not in task:
+                                            task["frequency"] = event_frequency
+                                            print(f"➕ Added frequency for task {task_id}: {event_frequency}")
+                                            updated = True
+                                            
                                         task_found = True
                                         if subtask_id and subtasks_for_task:
                                             # Handle subtask
@@ -1973,9 +2102,9 @@ def manage_task_points(request, event_id, task_id):
                                                         sub["points"] = points
                                                         sub["subtask_name"] = subtask_name
                                                         sub["status"] = status
-                                                        sub["last_updated_on"] = now_timestamp  # ✅ added
+                                                        sub["last_updated_on"] = now_timestamp
                                                         if "points_assigned_on" not in sub:
-                                                            sub["points_assigned_on"] = now_timestamp  # ✅ added (if new)
+                                                            sub["points_assigned_on"] = now_timestamp
                                                         updated = True
                                                         print(f"Updated subtask for {student_email}")
 
@@ -1987,8 +2116,8 @@ def manage_task_points(request, event_id, task_id):
                                                 "subtask_name": subtask_name,
                                                 "points": points,
                                                 "status": status,
-                                                "points_assigned_on": now_timestamp,  # ✅ added
-                                                "last_updated_on": now_timestamp      # ✅ added
+                                                "points_assigned_on": now_timestamp,
+                                                "last_updated_on": now_timestamp
                                             })
 
                                                 updated = True
@@ -2006,9 +2135,9 @@ def manage_task_points(request, event_id, task_id):
                                             if old_points != points or old_status != status:
                                                 task["points"] = points
                                                 task["status"] = status
-                                                task["last_updated_on"] = now_timestamp  # ✅ added
+                                                task["last_updated_on"] = now_timestamp
                                                 if "points_assigned_on" not in task:
-                                                    task["points_assigned_on"] = now_timestamp  # ✅ added
+                                                    task["points_assigned_on"] = now_timestamp
                                                 task["sub_task"] = []  # Ensure no subtasks
                                                 updated = True
                                                 print(f"Updated task for {student_email}")
@@ -2019,9 +2148,10 @@ def manage_task_points(request, event_id, task_id):
                                         "task_id": task_id,
                                         "task_name": task_name,
                                         "points": points,
+                                        "frequency": event_frequency,  # Store frequency directly in task
                                         "sub_task": [],
-                                        "points_assigned_on": now_timestamp,  # ✅ added
-                                        "last_updated_on": now_timestamp      # ✅ added
+                                        "points_assigned_on": now_timestamp,
+                                        "last_updated_on": now_timestamp
                                     }
                                     if subtask_id and subtasks_for_task:
                                         task_data["sub_task"] = [{
@@ -2029,31 +2159,30 @@ def manage_task_points(request, event_id, task_id):
                                             "subtask_name": subtask_name,
                                             "points": points,
                                             "status": status,
-                                            "points_assigned_on": now_timestamp,  # ✅ added
-                                            "last_updated_on": now_timestamp      # ✅ added
+                                            "points_assigned_on": now_timestamp,
+                                            "last_updated_on": now_timestamp
                                         }]
                                         task_data["points"] = points
                                     else:
                                         task_data["status"] = status
                                     level["task"].append(task_data)
                                     updated = True
-                                    print(f"Added new task for {student_email}")
+                                    print(f"Added new task for {student_email} with frequency: {event_frequency}")
                                 break
                         
                         if not level_found:
                             print(f"🆕 Creating new level for student {student_email}")
                             print(f"🔍 Level ID: {level_id}")
-                            print(f"🔍 Frequency from map: {level_frequency_map.get(level_id)}")
                             level_data = {
                                 "level_id": level_id,
                                 "level_name": level_name,
-                                "frequency": level_frequency_map.get(level_id),  # ✅ Frequency from map
                                 "task": [{
                                     "task_id": task_id,
                                     "task_name": task_name,
+                                    "frequency": event_frequency,  # Store frequency directly in task
                                     "points": points,
-                                    "points_assigned_on": now_timestamp,  # ✅ added
-                                    "last_updated_on": now_timestamp,      # ✅ added
+                                    "points_assigned_on": now_timestamp,
+                                    "last_updated_on": now_timestamp,
                                     "sub_task": []
                                 }]
                             }
@@ -2064,38 +2193,208 @@ def manage_task_points(request, event_id, task_id):
                                     "subtask_name": subtask_name,
                                     "points": points,
                                     "status": status,
-                                    "points_assigned_on": now_timestamp,  # ✅ added
-                                    "last_updated_on": now_timestamp      # ✅ added
+                                    "points_assigned_on": now_timestamp,
+                                    "last_updated_on": now_timestamp
                                 }]
                                 level_data["task"][0]["points"] = points
                             else:
                                 level_data["task"][0]["status"] = status
                             s["score"].append(level_data)
                             updated = True
-                            print(f"Added new level for {student_email} with frequency: {level_frequency_map.get(level_id)}")
-                        break
+                            print(f"Added new level for {student_email} with task frequency: {event_frequency}")
+                        break  # Break after finding the student
+
+                # Handle attendance for existing students
+                if student_found and mark_attendance and attendance_required and current_student_record:
+                    # Initialize attendance if not exists
+                    if "attendance" not in current_student_record:
+                        current_student_record["attendance"] = {
+                            "earned_points": 0,
+                            "current_streak": 0,
+                            "history": []
+                        }
+                    
+                    # Get attendance history
+                    history = current_student_record["attendance"].get("history", [])
+                    
+                    # Check if there's already a record for this date
+                    existing_record_index = next(
+                        (i for i, record in enumerate(history)
+                        if record.get("date") == record_date),
+                        None
+                    )
+                    
+                    # Check if there's already a record for this specific task
+                    task_record_index = next(
+                        (i for i, record in enumerate(history)
+                        if record.get("date") == record_date and record.get("task_id") == task_id),
+                        None
+                    )
+                    
+                    # Determine attendance handling based on frequency
+                    if event_frequency == "Once":
+                        # For "Once" tasks, only record attendance once per task
+                        if task_record_index is None:
+                            # No record for this task - create one
+                            attendance_points_to_award = points_per_attendance if present else 0
+                            attendance_record = {
+                                "date": record_date,
+                                "present": present,
+                                "points": attendance_points_to_award,
+                                "timestamp": now_dt,
+                                "task_id": task_id
+                            }
+                            history.append(attendance_record)
+                            
+                            if present:
+                                current_student_record["attendance"]["earned_points"] += attendance_points_to_award
+                                for result in attendance_results:
+                                    if result["student_email"] == student_email:
+                                        result["points_earned"] = attendance_points_to_award
+                                        break
+                            
+                            attendance_updated = True
+                            print(f"Created new attendance record for 'Once' task {task_id} - Points: {attendance_points_to_award}")
+                        
+                    elif event_frequency == "Daily":
+                        # For "Daily" tasks, check if we already have a record for today
+                        if existing_record_index is not None:
+                            # Already have a record for today - only update if from a different task
+                            if task_record_index is None and present:
+                                # This is a new task for today and student is present - add additional points
+                                attendance_points_to_award = points_per_attendance
+                                attendance_record = {
+                                    "date": record_date,
+                                    "present": present,
+                                    "points": attendance_points_to_award,
+                                    "timestamp": now_dt,
+                                    "task_id": task_id
+                                }
+                                history.append(attendance_record)
+                                
+                                current_student_record["attendance"]["earned_points"] += attendance_points_to_award
+                                for result in attendance_results:
+                                    if result["student_email"] == student_email:
+                                        result["points_earned"] = attendance_points_to_award
+                                        break
+                                
+                                attendance_updated = True
+                                print(f"Added additional attendance points for 'Daily' task {task_id} - Points: {attendance_points_to_award}")
+                        else:
+                            # No record for today - create one
+                            attendance_points_to_award = points_per_attendance if present else 0
+                            attendance_record = {
+                                "date": record_date,
+                                "present": present,
+                                "points": attendance_points_to_award,
+                                "timestamp": now_dt,
+                                "task_id": task_id
+                            }
+                            history.append(attendance_record)
+                            
+                            if present:
+                                current_student_record["attendance"]["earned_points"] += attendance_points_to_award
+                                for result in attendance_results:
+                                    if result["student_email"] == student_email:
+                                        result["points_earned"] = attendance_points_to_award
+                                        break
+                            
+                            attendance_updated = True
+                            print(f"Created new attendance record for 'Daily' task {task_id} - Points: {attendance_points_to_award}")
+                    
+                    elif event_frequency == "Weekly":
+                        # For "Weekly" tasks, determine the week number
+                        current_week = now_dt.isocalendar()[1]
+                        current_year = now_dt.year
+                        
+                        # Check if we have a record for this task this week
+                        task_this_week = False
+                        for record in history:
+                            if record.get("task_id") == task_id:
+                                try:
+                                    record_date_obj = datetime.strptime(record.get("date"), "%Y-%m-%d")
+                                    if (record_date_obj.isocalendar()[0] == current_year and 
+                                        record_date_obj.isocalendar()[1] == current_week):
+                                        task_this_week = True
+                                        break
+                                except (ValueError, TypeError):
+                                    pass
+                        
+                        if not task_this_week:
+                            # No record for this task this week - create one
+                            attendance_points_to_award = points_per_attendance if present else 0
+                            attendance_record = {
+                                "date": record_date,
+                                "present": present,
+                                "points": attendance_points_to_award,
+                                "timestamp": now_dt,
+                                "task_id": task_id
+                            }
+                            history.append(attendance_record)
+                            
+                            if present:
+                                current_student_record["attendance"]["earned_points"] += attendance_points_to_award
+                                for result in attendance_results:
+                                    if result["student_email"] == student_email:
+                                        result["points_earned"] = attendance_points_to_award
+                                        break
+                            
+                            attendance_updated = True
+                            print(f"Created new attendance record for 'Weekly' task {task_id} - Points: {attendance_points_to_award}")
+                    
+                    # Recalculate streak if attendance was updated
+                    if attendance_updated:
+                        # Sort attendance records by date
+                        history.sort(key=lambda x: datetime.strptime(x["date"], "%Y-%m-%d"))
+                        
+                        # Get all unique dates where the student was present
+                        present_dates = set()
+                        for record in history:
+                            if record.get("present", False):
+                                present_dates.add(record.get("date"))
+                        
+                        # Calculate streak based on consecutive dates
+                        date_list = sorted(list(present_dates), reverse=True)
+                        current_streak = 0
+                        
+                        if date_list:
+                            current_date = datetime.strptime(date_list[0], "%Y-%m-%d")
+                            for date_str in date_list:
+                                date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                                if (current_date - date_obj).days <= 1:
+                                    current_streak += 1
+                                    current_date = date_obj
+                                else:
+                                    break
+                        
+                        current_student_record["attendance"]["current_streak"] = current_streak
+                        for result in attendance_results:
+                            if result["student_email"] == student_email:
+                                result["current_streak"] = current_streak
+                                result["updated"] = True
+                                break
 
                 if not student_found:
                     print(f"🆕 Creating new student {student_email}")
                     print(f"🔍 Level ID: {level_id}")
-                    print(f"🔍 Frequency from map: {level_frequency_map.get(level_id)}")
                     student_data = {
                         "student_email": student_email,
                         "student_name": student_name,
                         "score": [{
                             "level_id": level_id,
                             "level_name": level_name,
-                            "frequency": level_frequency_map.get(level_id),  # ✅ Frequency from map
                             "task": [{
                                 "task_id": task_id,
                                 "task_name": task_name,
+                                "frequency": event_frequency,  # Store frequency directly in task
                                 "points": points,
-                                "points_assigned_on": now_timestamp,  # ✅ added
-                                "last_updated_on": now_timestamp,      # ✅ added
+                                "points_assigned_on": now_timestamp,
+                                "last_updated_on": now_timestamp,
                                 "sub_task": []
                             }]
                         }]
                     }
+                    
                     if subtask_id and has_subtasks:
                         # Create student with subtask
                         student_data["score"][0]["task"][0]["sub_task"] = [{
@@ -2103,26 +2402,56 @@ def manage_task_points(request, event_id, task_id):
                             "subtask_name": subtask_name,
                             "points": points,
                             "status": status,
-                            "points_assigned_on": now_timestamp,  # ✅ added
-                            "last_updated_on": now_timestamp      # ✅ added
+                            "points_assigned_on": now_timestamp,
+                            "last_updated_on": now_timestamp
                         }]
                         student_data["score"][0]["task"][0]["points"] = points
                     else:
                         student_data["score"][0]["task"][0]["status"] = status
+                        
+                    # When adding attendance data for new students:
+                    if mark_attendance and attendance_required:
+                        # For a new student, always create the first attendance record
+                        attendance_points_to_award = points_per_attendance if present else 0
+                        
+                        attendance_data = {
+                            "earned_points": attendance_points_to_award,
+                            "current_streak": 1 if present else 0,
+                            "history": [{
+                                "date": record_date,
+                                "present": present,
+                                "points": attendance_points_to_award,
+                                "timestamp": now_dt,
+                                "task_id": task_id  # Track which task created this record
+                            }]
+                        }
+                        student_data["attendance"] = attendance_data
+                        
+                        for result in attendance_results:
+                            if result["student_email"] == student_email:
+                                result["points_earned"] = attendance_points_to_award
+                                result["current_streak"] = 1 if present else 0
+                                result["updated"] = True
+                                break
+                        
+                        attendance_updated = True
+
                     admin_entry.setdefault("marks", []).append(student_data)
                     updated = True
-                    print(f"Added new student {student_email} with level frequency: {level_frequency_map.get(level_id)}")
+                    print(f"Added new student {student_email} with task frequency: {event_frequency}")
 
             print(f"Updated flag: {updated}")
+            print(f"Attendance updated flag: {attendance_updated}")
             
-            if updated:
+            if updated or attendance_updated:
                 # Add debugging before database update
                 print("🔍 DEBUG: About to update database with event_doc structure:")
                 for assigned_admin in event_doc.get("assigned_to", []):
                     if assigned_admin.get("admin_id") == admin_id:
                         for mark in assigned_admin.get("marks", []):
                             for score in mark.get("score", []):
-                                print(f"🔍 Level {score.get('level_id')}: frequency = {score.get('frequency')}")
+                                for task in score.get("task", []):
+                                    print(f"🔍 Task {task.get('task_id')}: frequency = {task.get('frequency')}")
                 
                 result = points_collection.replace_one({"_id": event_doc["_id"]}, event_doc)
                 print(f"Database update result: {result.modified_count} documents modified")
@@ -2134,13 +2463,24 @@ def manage_task_points(request, event_id, task_id):
                     if assigned_admin.get("admin_id") == admin_id:
                         for mark in assigned_admin.get("marks", []):
                             for score in mark.get("score", []):
-                                print(f"🔍 DB Level {score.get('level_id')}: frequency = {score.get('frequency')}")
+                                for task in score.get("task", []):
+                                    print(f"🔍 DB Task {task.get('task_id')}: frequency = {task.get('frequency')}")
 
-            return JsonResponse({
-                "message": "Points updated successfully" if updated else "No changes made",
-                "updated": updated,
+            response_data = {
+                "message": "Data updated successfully" if updated or attendance_updated else "No changes made",
+                "updated": updated or attendance_updated,
                 "students_processed": len(students)
-            }, status=200)
+            }
+            
+            if mark_attendance and attendance_required:
+                response_data["attendance"] = {
+                    "updated": attendance_updated,
+                    "results": attendance_results,
+                    "points_per_attendance": points_per_attendance,
+                    "event_frequency": event_frequency
+                }
+                
+            return JsonResponse(response_data, status=200)
 
         except Exception as e:
             import traceback
@@ -2149,6 +2489,29 @@ def manage_task_points(request, event_id, task_id):
 
     else:
         return JsonResponse({"error": "Invalid request method"}, status=405)
+
+def calculate_points_per_attendance(total_points, frequency, total_days):
+    """
+    Calculate points to award per attendance based on frequency.
+    
+    Args:
+        total_points (float): Total attendance points available for the event
+        frequency (str): Task frequency ('Once', 'Daily', or 'Weekly')
+        total_days (int): Total days the task runs for
+        
+    Returns:
+        float: Points per attendance mark, rounded to 2 decimal places
+    """
+    if frequency == "Once":
+        return total_points  # Award all points at once
+    elif frequency == "Daily":
+        # For daily tasks, divide total points by the number of days
+        return round(total_points / max(1, total_days), 2)
+    elif frequency == "Weekly":
+        # For weekly tasks, divide total points by the number of weeks
+        weeks = max(1, (total_days + 6) // 7)  # Ceiling division for weeks
+        return round(total_points / weeks, 2)
+    return total_points  # Default fallback
     
 @csrf_exempt
 def get_students_details(request, event_id):
@@ -2355,7 +2718,7 @@ def forgot_password(request):
             # URL-encode the token and email for the reset link
             encoded_token = urllib.parse.quote(reset_token)
             encoded_email = urllib.parse.quote(email)
-            reset_link = f'https://snsct-leaderboard.vercel.app/admin/forgot-password-reset-password?token={encoded_token}&email={encoded_email}'
+            reset_link = f'http://localhost:5173/admin/forgot-password-reset-password?token={encoded_token}&email={encoded_email}'
             logger.info(f"Sending reset link to {email}: {reset_link}")
 
             # Send the reset link via email
@@ -2575,18 +2938,17 @@ def reset_password(request):
             return JsonResponse({'error': str(e)}, status=500)
 
     return JsonResponse({'error': 'Invalid request method'}, status=405)
+
 @csrf_exempt
 def get_detailed_student_tasks(request):
     """
     POST: Retrieve detailed task and subtask points for a specific student by event_id and student_email.
-    Returns hierarchical structure of levels, tasks, and subtasks with points, total_points, status, and timestamps.
-    No JWT authentication required.
+    Returns hierarchical structure even if the student has not been scored yet (all points default to 0).
     """
     if request.method != "POST":
         return JsonResponse({"error": "Invalid request method. Use POST."}, status=405)
 
     try:
-        # Parse request body
         data = json.loads(request.body)
         event_id = data.get("event_id")
         student_email = data.get("student_email")
@@ -2594,33 +2956,29 @@ def get_detailed_student_tasks(request):
         if not all([event_id, student_email]):
             return JsonResponse({"error": "event_id and student_email are required"}, status=400)
 
-        # Find the points document for the event
+        # Fetch points and event structure
         points_doc = points_collection.find_one({"event_id": event_id})
-        if not points_doc:
-            return JsonResponse({"error": "No points data found for this event"}, status=404)
-
-        # Find the event document for total points
         event_doc = tasks_collection.find_one({"_id": ObjectId(event_id)})
+
         if not event_doc:
             return JsonResponse({"error": "No event data found for this event"}, status=404)
 
-        # Extract hierarchical task data for the specific student
+        # Search for the student's score data if available
         student_data = None
-        for admin_entry in points_doc.get("assigned_to", []):
-            for mark in admin_entry.get("marks", []):
-                if mark.get("student_email") == student_email:
-                    student_data = mark
+        if points_doc:
+            for admin_entry in points_doc.get("assigned_to", []):
+                for mark in admin_entry.get("marks", []):
+                    if mark.get("student_email") == student_email:
+                        student_data = mark
+                        break
+                if student_data:
                     break
-            if student_data:
-                break
 
-        if not student_data:
-            return JsonResponse({"message": f"No data found for student {student_email} in event {event_id}"}, status=200)
-
-        # Create a lookup for task and subtask total points from event_doc
+        # Create lookup dictionaries
         task_total_points = {}
         subtask_total_points = {}
         total_possible_score = 0
+
         for level in event_doc.get("levels", []):
             for task in level.get("tasks", []):
                 task_total_points[task["task_id"]] = task.get("total_points", 0)
@@ -2628,78 +2986,87 @@ def get_detailed_student_tasks(request):
                 for subtask in task.get("subtasks", []):
                     subtask_total_points[subtask["subtask_id"]] = subtask.get("points", 0)
 
-        # Format the hierarchical response
+        # Build score lookup for quick access if points exist
+        student_score_lookup = {}
+        if student_data:
+            for level in student_data.get("score", []):
+                for task in level.get("task", []):
+                    task_id = task.get("task_id")
+                    task_info = {
+                        "points": task.get("points", 0),
+                        "status": task.get("status", "incomplete"),
+                        "points_assigned_on": task.get("points_assigned_on"),
+                        "last_updated_on": task.get("last_updated_on"),
+                        "subtasks": {sub.get("subtask_id"): sub for sub in task.get("sub_task", [])}
+                    }
+                    student_score_lookup[task_id] = task_info
+
+        total_score = 0
         levels = []
-        total_points = 0
-        for score in student_data.get("score", []):
-            level_points = sum(task.get("points", 0) for task in score.get("task", []))
-            total_points += level_points
+
+        for level in event_doc.get("levels", []):
+            level_points = 0
             level_data = {
-                "level_id": score.get("level_id"),
-                "level_name": score.get("level_name", ""),
-                "frequency": score.get("frequency"),
-                "total_points": level_points,
+                "level_id": level.get("level_id"),
+                "level_name": level.get("level_name"),
+                "frequency": level.get("frequency"),
+                "total_points": 0,
                 "tasks": []
             }
-            for task in score.get("task", []):
-                # Handle points_assigned_on and last_updated_on for tasks
-                points_assigned_on = task.get("points_assigned_on", "")
-                if isinstance(points_assigned_on, dict):
-                    points_assigned_on = points_assigned_on.get("$date", "")
-                elif isinstance(points_assigned_on, datetime):
-                    points_assigned_on = points_assigned_on.isoformat()
 
-                last_updated_on = task.get("last_updated_on", "")
-                if isinstance(last_updated_on, dict):
-                    last_updated_on = last_updated_on.get("$date", "")
-                elif isinstance(last_updated_on, datetime):
-                    last_updated_on = last_updated_on.isoformat()
+            for task in level.get("tasks", []):
+                task_id = task.get("task_id")
+                score_info = student_score_lookup.get(task_id, {})
+                task_points = score_info.get("points", 0)
+                level_points += task_points
+                total_score += task_points
+
+                # Convert timestamps
+                def parse_time(ts):
+                    if isinstance(ts, dict):
+                        return ts.get("$date", "")
+                    elif isinstance(ts, datetime):
+                        return ts.isoformat()
+                    return ts or ""
 
                 task_data = {
-                    "task_id": task.get("task_id"),
+                    "task_id": task_id,
                     "task_name": task.get("task_name"),
-                    "points": task.get("points", 0),
-                    "total_points": task_total_points.get(task.get("task_id"), 0),
-                    "status": task.get("status", "incomplete"),
-                    "points_assigned_on": points_assigned_on,
-                    "last_updated_on": last_updated_on,
+                    "points": task_points,
+                    "total_points": task_total_points.get(task_id, 0),
+                    "status": score_info.get("status", "incomplete"),
+                    "points_assigned_on": parse_time(score_info.get("points_assigned_on", "")),
+                    "last_updated_on": parse_time(score_info.get("last_updated_on", "")),
                     "sub_tasks": []
                 }
-                for subtask in task.get("sub_task", []):
-                    # Handle points_assigned_on and last_updated_on for subtasks
-                    sub_points_assigned_on = subtask.get("points_assigned_on", "")
-                    if isinstance(sub_points_assigned_on, dict):
-                        sub_points_assigned_on = sub_points_assigned_on.get("$date", "")
-                    elif isinstance(sub_points_assigned_on, datetime):
-                        sub_points_assigned_on = sub_points_assigned_on.isoformat()
 
-                    sub_last_updated_on = subtask.get("last_updated_on", "")
-                    if isinstance(sub_last_updated_on, dict):
-                        sub_last_updated_on = sub_last_updated_on.get("$date", "")
-                    elif isinstance(sub_last_updated_on, datetime):
-                        sub_last_updated_on = sub_last_updated_on.isoformat()
-
+                for sub in task.get("subtasks", []):
+                    subtask_id = sub.get("subtask_id")
+                    sub_info = score_info.get("subtasks", {}).get(subtask_id, {})
                     subtask_data = {
-                        "subtask_id": subtask.get("subtask_id"),
-                        "subtask_name": subtask.get("subtask_name"),
-                        "points": subtask.get("points", 0),
-                        "total_points": subtask_total_points.get(subtask.get("subtask_id"), 0),
-                        "status": subtask.get("status", "incomplete"),
-                        "points_assigned_on": sub_points_assigned_on,
-                        "last_updated_on": sub_last_updated_on
+                        "subtask_id": subtask_id,
+                        "subtask_name": sub.get("subtask_name"),
+                        "points": sub_info.get("points", 0),
+                        "total_points": subtask_total_points.get(subtask_id, 0),
+                        "status": sub_info.get("status", "incomplete"),
+                        "points_assigned_on": parse_time(sub_info.get("points_assigned_on", "")),
+                        "last_updated_on": parse_time(sub_info.get("last_updated_on", ""))
                     }
                     task_data["sub_tasks"].append(subtask_data)
+
                 level_data["tasks"].append(task_data)
+
+            level_data["total_points"] = level_points
             levels.append(level_data)
 
         return JsonResponse({
             "success": True,
-            "message": f"Found data for student {student_data.get('student_name', student_email)} in event {event_id}",
+            "message": f"Found data for student {student_data.get('student_name', student_email) if student_data else student_email} in event {event_id}",
             "event_id": event_id,
-            "event_name": points_doc.get("event_name", ""),
+            "event_name": points_doc.get("event_name") if points_doc else event_doc.get("event_name", ""),
             "student_email": student_email,
-            "student_name": student_data.get("student_name", ""),
-            "total_points": total_points,
+            "student_name": student_data.get("student_name") if student_data else "",
+            "total_points": total_score,
             "total_possible_score": total_possible_score,
             "levels": levels
         }, status=200)

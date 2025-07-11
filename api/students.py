@@ -3,7 +3,7 @@ from django.http import JsonResponse
 from datetime import datetime, timedelta
 from django.contrib.auth.hashers import make_password, check_password
 from pymongo import MongoClient
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_GET
 from bson import ObjectId
 from dotenv import load_dotenv
 import os
@@ -633,7 +633,7 @@ def send_reset_link(request):
 
         # Send email with reset link
         try:
-            reset_link = f'https://snsct-leaderboard.vercel.app/studentresetpassword?token={token}&email={email}'
+            reset_link = f'http://localhost:5173/studentresetpassword?token={token}&email={email}'
             subject = 'Password Reset Link'
             message = f'Click the following link to reset your password: {reset_link}\nThis link will expire in 1 hour.'
 
@@ -1991,12 +1991,18 @@ def get_leaderboard_by_level(request):
         level_leaderboards = {f"level_{i+1}": [] for i in range(number_of_levels)}
         overall_leaderboard = []
 
-        # Calculate total possible score
+        # New dict to store level-wise total possible score
+        level_possible_scores = {}
+
+        # Calculate total possible score (overall and per level)
         total_possible_score = 0
         if event and "levels" in event:
-            for level in event["levels"]:
+            for idx, level in enumerate(event["levels"]):
+                level_total = 0
                 for task in level.get("tasks", []):
-                    total_possible_score += task.get("total_points", 0)
+                    level_total += task.get("total_points", 0)
+                total_possible_score += level_total
+                level_possible_scores[f"level_{idx+1}"] = level_total
 
         # Collect mapped user emails
         mapped_emails = set()
@@ -2144,6 +2150,7 @@ def get_leaderboard_by_level(request):
             "success": True,
             "overall": overall_leaderboard,
             "levels": level_leaderboards,
+            "level_possible_scores": level_possible_scores,
             "total_students": len(overall_leaderboard),
             "current_student": current_student or {"rank": 0, "points": 0, "student_id": "", "timestamp": None, "total_possible_score": total_possible_score}
         }, status=200)
@@ -2503,13 +2510,9 @@ def student_daily_points_by_event(request):
 
     except Exception as e:
         return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
+
 @csrf_exempt
 def student_recent_tasks_by_event(request):
-    """
-    Fetch recent tasks in an event, based on logged-in student info and event_id.
-    Now includes total points grouped by event for the student,
-    and only lists incomplete tasks.
-    """
     if request.method != 'POST':
         return JsonResponse({"error": "Only POST method allowed"}, status=405)
 
@@ -2534,25 +2537,47 @@ def student_recent_tasks_by_event(request):
         if not student_email or not student_name:
             return JsonResponse({"error": "Invalid token payload"}, status=400)
 
-        # Find the event in the events_collection
+        # Check if the event_id and student_email exist in the mapped_events collection
+        mapped_event = mapped_events_collection.find_one({
+            "event_id": event_id,
+            "assigned_admins.users.email": student_email
+        })
+
+        if not mapped_event:
+            return JsonResponse({"error": "Event or student not found in mapped events"}, status=404)
+
+        # Find the event in the tasks_collection to get the structure
         event_doc = tasks_collection.find_one({"_id": ObjectId(event_id)})
         if not event_doc:
-            return JsonResponse({"error": "Event not found"}, status=404)
+            return JsonResponse({"error": "Event not found in tasks collection"}, status=404)
 
-        # === Fetch task completion status from Points collection ===
-        completed_task_ids = set()
+        # Fetch task and subtask statuses and points from Points collection
+        points_data = points_collection.find_one({"event_id": event_id})
+        student_task_data = {}
 
-        points_data = db['Points'].find_one({"event_id": event_id})
         if points_data:
             for admin in points_data.get("assigned_to", []):
                 for student in admin.get("marks", []):
                     if student.get("student_email") == student_email:
                         for level in student.get("score", []):
                             for task in level.get("task", []):
-                                if task.get("status") == "completely_finished":
-                                    completed_task_ids.add(task.get("task_id"))
+                                task_id = task.get("task_id")
+                                task_status = task.get("status", "incomplete")
+                                task_points = task.get("points", 0)
 
-        # === Collect tasks data ===
+                                student_task_data[task_id] = {
+                                    "points": task_points,
+                                    "status": task_status,
+                                    "subtasks": {
+                                        subtask.get("subtask_id"): {
+                                            "points": subtask.get("points", 0),
+                                            "status": subtask.get("status", "incomplete")
+                                        }
+                                        for subtask in task.get("sub_task", [])
+                                    }
+                                }
+
+        # Collect tasks data with statuses and points from Points collection
         recent_tasks = []
         event_name = event_doc.get("event_name")
         start_date = event_doc.get("start_date")
@@ -2561,26 +2586,36 @@ def student_recent_tasks_by_event(request):
         for level in event_doc.get("levels", []):
             level_id = level.get("level_id")
             level_name = level.get("level_name")
-
             for task in level.get("tasks", []):
                 task_id = task.get("task_id")
+                task_data = student_task_data.get(task_id, {})
 
-                # ✅ Skip completed tasks
-                if task_id in completed_task_ids:
-                    continue
+                # Determine task completion status based on subtasks
+                subtasks = task_data.get("subtasks", {})
+                if subtasks:
+                    subtask_statuses = set(subtask.get("status") for subtask in subtasks.values())
+                    if all(status == "completely_finished" for status in subtask_statuses):
+                        task_status = "completely_finished"
+                    elif all(status == "incomplete" for status in subtask_statuses):
+                        task_status = "incomplete"
+                    else:
+                        task_status = "in progress"
+                else:
+                    task_status = task_data.get("status", "incomplete")
 
                 task_obj = {
                     "task_id": task_id,
                     "task_name": task.get("task_name"),
                     "description": task.get("description"),
                     "total_points": task.get("total_points"),
+                    "points": task_data.get("points", 0),
+                    "status": task_status,
                     "deadline": task.get("deadline"),
                     "deadline_time": task.get("deadline_time"),
                     "full_deadline": task.get("full_deadline"),
                     "frequency": task.get("frequency"),
                     "start_date": task.get("start_date"),
                     "end_date": task.get("end_date"),
-                    "task_status": task.get("task_status"),
                     "created_at": task.get("created_at").isoformat() if task.get("created_at") else None,
                     "updated_at": task.get("updated_at").isoformat() if task.get("updated_at") else None,
                     "level_id": level_id,
@@ -2589,16 +2624,27 @@ def student_recent_tasks_by_event(request):
                 }
 
                 for sub in task.get("subtasks", []):
+                    subtask_id = sub.get("subtask_id")
+                    subtask_data = task_data.get("subtasks", {}).get(subtask_id, {})
+
+                    subtask_status = subtask_data.get("status", "incomplete")
+                    if subtask_status == "completely_finished":
+                        subtask_completion_status = "completely_finished"
+                    elif subtask_status == "partially_finished":
+                        subtask_completion_status = "in progress"
+                    else:
+                        subtask_completion_status = "incomplete"
+
                     subtask_obj = {
-                        "subtask_id": sub.get("subtask_id"),
+                        "subtask_id": subtask_id,
                         "name": sub.get("name"),
                         "description": sub.get("description"),
-                        "points": sub.get("points"),
+                        "points": subtask_data.get("points", 0),
+                        "status": subtask_completion_status,
                         "deadline": sub.get("deadline"),
                         "deadline_time": sub.get("deadline_time"),
                         "full_deadline": sub.get("full_deadline"),
-                        "status": sub.get("status"),
-                        "completion_history": sub.get("completion_history", [])
+                        "completion_history": []
                     }
                     task_obj["subtasks"].append(subtask_obj)
 
@@ -2607,21 +2653,9 @@ def student_recent_tasks_by_event(request):
         # Sort tasks by created_at descending
         recent_tasks.sort(key=lambda x: x["created_at"] or '', reverse=True)
 
-        # === Points Summary ===
-        total_points_earned = 0
-        total_possible_points = 0
-
-        for level in event_doc.get("levels", []):
-            for task in level.get("tasks", []):
-                total_possible_points += task.get("total_points", 0)
-
-        if points_data:
-            for admin in points_data.get("assigned_to", []):
-                for student in admin.get("marks", []):
-                    if student.get("student_email") == student_email:
-                        for score in student.get("score", []):
-                            for task in score.get("task", []):
-                                total_points_earned += task.get("points", 0)
+        # Points Summary
+        total_points_earned = sum(task.get("points", 0) for task in recent_tasks)
+        total_possible_points = sum(task.get("total_points", 0) for level in event_doc.get("levels", []) for task in level.get("tasks", []))
 
         return JsonResponse({
             "student_email": student_email,
@@ -2640,9 +2674,9 @@ def student_recent_tasks_by_event(request):
 
     except Exception as e:
         import traceback
-        print(traceback.format_exc())
+        traceback.print_exc()
         return JsonResponse({"error": f"Server error: {str(e)}"}, status=500)
-
+    
 @csrf_exempt
 def student_events_list(request):
     if request.method != 'POST':
@@ -2954,6 +2988,37 @@ def get_student_levels_progress(request):
             'updated_at': updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at),
             'levels': level_data
         }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
+
+@csrf_exempt
+@require_GET
+def get_student_streak(request):
+    """
+    GET endpoint to return the current_streak of a student in a specific event.
+    Expects query parameters: ?event_id=...&student_email=...
+    """
+    try:
+        event_id = request.GET.get('event_id')
+        student_email = request.GET.get('student_email')
+
+        if not event_id or not student_email:
+            return JsonResponse({'error': 'event_id and student_email are required'}, status=400)
+
+        # Fetch the relevant event in the Points collection
+        points_doc = points_collection.find_one({"event_id": event_id})
+        if not points_doc:
+            return JsonResponse({'error': 'Event not found in Points collection'}, status=404)
+
+        # Traverse to find the student entry
+        for admin in points_doc.get("assigned_to", []):
+            for mark in admin.get("marks", []):
+                if mark.get("student_email") == student_email:
+                    streak = mark.get("attendance", {}).get("current_streak", 0)
+                    return JsonResponse({"success": True, "current_streak": streak}, status=200)
+
+        return JsonResponse({'error': 'Student not found in this event'}, status=404)
 
     except Exception as e:
         return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)

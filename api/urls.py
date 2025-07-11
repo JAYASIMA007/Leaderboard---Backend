@@ -7,7 +7,6 @@ from .superadmin import *
 from .students import *
 
 
-
 urlpatterns =[
 
 
@@ -61,7 +60,7 @@ urlpatterns =[
     path("student/recent_events_by_student/", student_events_list, name="recent_events_by_student"),
     # path("student/get-daily-points/", get_daily_points, name="get_daily_points"),
     path("student/get_student_levels_progress/",get_student_levels_progress,name="get_student_levels_progress"),
-
+    path('student/get-student-streak', get_student_streak, name='get_student_streak'),
 
     #Superadmin URLs
     

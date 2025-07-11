@@ -982,17 +982,25 @@ def update_task(request, event_id):
 def delete_task(request, event_id):
     if request.method == 'DELETE':
         try:
+            # Delete from tasks collection (event definition)
             result = tasks_collection.delete_one({'_id': ObjectId(event_id)})
             if result.deleted_count == 0:
-                return JsonResponse({'error': 'Event not found'}, status=404)
+                return JsonResponse({'error': 'Event not found in tasks collection'}, status=404)
 
+            # Delete from mapped_events_collection
             mapped_events_collection.delete_one({'event_id': event_id})
 
-            return JsonResponse({'message': 'Event deleted successfully'}, status=200)
+            # Delete from points_collection
+            points_collection.delete_one({'event_id': event_id})
+
+            return JsonResponse({'message': 'Event and related data deleted successfully'}, status=200)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return JsonResponse({'error': str(e)}, status=500)
     else:
-        return JsonResponse({'error': 'Method not allowed'}, status=405)   
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+
  
 @csrf_exempt
 def fetch_all_tasks_for_superadmin(request):
@@ -1051,7 +1059,7 @@ def fetch_all_tasks_for_superadmin(request):
    
 def send_invitation_email_logic(email: str, event_name: str, full_name: str = None, is_login: bool = True, token: str = None) -> tuple[bool, str]:
     greeting = f"Hi {full_name}," if full_name else "Dear Participant,"
-    link = f"https://snsct-leaderboard.vercel.app/studentlogin" if is_login else f"https://snsct-leaderboard.vercel.app/studentsignup?token={token}&email={email}"
+    link = f"http://localhost:5173/studentlogin" if is_login else f"http://localhost:5173/studentsignup?token={token}&email={email}"
     try:
         send_mail(
             subject=f'Invitation to Participate in {event_name}',
@@ -1342,7 +1350,7 @@ def generate_setup_token_user(user_id, expiry_minutes=30):
 
 def send_Admin_setup_email_logic(email: str, full_name: str, token: str) -> tuple[bool, str]:
     try:
-        setup_link = f'https://snsct-leaderboard.vercel.app/admin/reset-password?token={token}&email={email}'
+        setup_link = f'http://localhost:5173/admin/reset-password?token={token}&email={email}'
         send_mail(
             subject='Set your password for your account',
             message=f"""
@@ -1367,7 +1375,7 @@ SuperAdmin Team
 
 def send_student_setup_email_logic(email: str, full_name: str, token: str) -> tuple[bool, str]:
     try:
-        setup_link = f'https://snsct-leaderboard.vercel.app/student/setup-password?token={token}'
+        setup_link = f'http://localhost:5173/student/setup-password?token={token}'
         send_mail(
             subject='Set your password for Student Portal',
             message=f"""
