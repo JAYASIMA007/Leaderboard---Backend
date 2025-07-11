@@ -1796,7 +1796,6 @@ def get_leaderboard_data(request):
     except Exception as e:
         return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
 
-        
 @csrf_exempt
 @require_POST
 def get_student_data(request):
@@ -1844,6 +1843,63 @@ def get_student_data(request):
         if not student:
             return JsonResponse({'error': 'Student not found'}, status=404)
         
+        # Check if login should be recorded (once per day)
+        current_time = datetime.now()
+        current_date = current_time.date()
+        last_login = student.get('last_login')
+        login_history = student.get('login_history', [])
+        login_count_updated = False
+        
+        # Check if already logged in today
+        already_logged_today = False
+        
+        if last_login:
+            last_login_date = last_login.date() if hasattr(last_login, 'date') else last_login
+            already_logged_today = (last_login_date == current_date)
+        
+        # Also check login_history for today's date to be extra sure
+        if not already_logged_today and login_history:
+            for login_time in reversed(login_history[-5:]):  # Check last 5 entries for efficiency
+                login_date = login_time.date() if hasattr(login_time, 'date') else login_time
+                if hasattr(login_date, 'year'):  # Ensure it's a date object
+                    if login_date == current_date:
+                        already_logged_today = True
+                        break
+        
+        # Only update login data if not already logged in today
+        if not already_logged_today:
+            # Update login count and last login
+            login_count = student.get('login_count', 0) + 1
+            
+            # Add current login to history
+            updated_login_history = login_history + [current_time]
+            
+            # Update the database
+            student_collection.update_one(
+                {'_id': student['_id']},
+                {
+                    '$set': {
+                        'login_count': login_count, 
+                        'last_login': current_time,
+                        'login_history': updated_login_history
+                    }
+                }
+            )
+            
+            # Update the student object for response
+            student['login_count'] = login_count
+            student['last_login'] = current_time
+            student['login_history'] = updated_login_history
+            login_count_updated = True
+        else:
+            # Already logged in today, just update last_login time for session tracking
+            # but don't increment count or add to history
+            student_collection.update_one(
+                {'_id': student['_id']},
+                {'$set': {'last_login': current_time}}
+            )
+            student['last_login'] = current_time
+        
         # Remove sensitive fields
         fields_to_remove = ['login_attempts', 'password', 'password_set', 'status']
         for field in fields_to_remove:
@@ -1864,14 +1920,15 @@ def get_student_data(request):
         return JsonResponse({
             'success': True,
             'name': student.get('name', ''),
-            'student_data': student
+            'student_data': student,
+            'login_count_updated': login_count_updated
         }, status=200)
         
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid JSON in request body'}, status=400)
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-   
+        return JsonResponse({'error': str(e)}, status=500)       
+
 @csrf_exempt
 def get_leaderboard_by_level(request):
     """
