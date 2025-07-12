@@ -1059,7 +1059,7 @@ def fetch_all_tasks_for_superadmin(request):
    
 def send_invitation_email_logic(email: str, event_name: str, full_name: str = None, is_login: bool = True, token: str = None) -> tuple[bool, str]:
     greeting = f"Hi {full_name}," if full_name else "Dear Participant,"
-    link = f"http://localhost:5173/studentlogin" if is_login else f"http://localhost:5173/studentsignup?token={token}&email={email}"
+    link = f"https://snsct-dt-leaderboard.vercel.app/studentlogin" if is_login else f"https://snsct-dt-leaderboard.vercel.app/studentsignup?token={token}&email={email}"
     try:
         send_mail(
             subject=f'Invitation to Participate in {event_name}',
@@ -1350,7 +1350,7 @@ def generate_setup_token_user(user_id, expiry_minutes=30):
 
 def send_Admin_setup_email_logic(email: str, full_name: str, token: str) -> tuple[bool, str]:
     try:
-        setup_link = f'http://localhost:5173/admin/reset-password?token={token}&email={email}'
+        setup_link = f'https://snsct-dt-leaderboard.vercel.app/admin/reset-password?token={token}&email={email}'
         send_mail(
             subject='Set your password for your account',
             message=f"""
@@ -1375,7 +1375,7 @@ SuperAdmin Team
 
 def send_student_setup_email_logic(email: str, full_name: str, token: str) -> tuple[bool, str]:
     try:
-        setup_link = f'http://localhost:5173/student/setup-password?token={token}'
+        setup_link = f'https://snsct-dt-leaderboard.vercel.app/student/setup-password?token={token}'
         send_mail(
             subject='Set your password for Student Portal',
             message=f"""
